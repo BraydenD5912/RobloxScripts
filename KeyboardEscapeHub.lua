@@ -1,6 +1,7 @@
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 -- OUTCOME HUB â€” +1 Speed Keyboard Escape
 -- Auto Farm | Auto Win | Auto Rebirth | Movement | ESP
+-- v2 â€” improved win pad detection, remote firing, treadmill
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua'))()
@@ -20,6 +21,22 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- KNOWN COORDINATES (from game research)
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+local WIN_COORDS = {
+    World1 = Vector3.new(-14003.95, 750.54, 3066),
+    World2 = Vector3.new(7984, 728, 5144),
+    World3 = Vector3.new(7984, 1200, 5144),
+}
+
+-- Stage rewards for reference
+local STAGE_REWARDS = {
+    [1] = 1, [2] = 3, [3] = 10, [4] = 20, [5] = 60,
+    [6] = 100, [7] = 150, [8] = 300, [9] = 500, [10] = 1000,
+    [11] = 2500, [12] = 10000, [13] = 25000, [14] = 50000, [15] = 150000,
+}
+
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 -- STATE
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 local State = {
@@ -30,8 +47,10 @@ local State = {
 
     -- Auto Win
     AutoWin = false,
-    AutoWinWorld = 1,
-    AutoWinDelay = 0.5,
+    AutoWinMode = "Scan", -- "Scan" | "World1" | "World2" | "World3"
+    AutoWinTween = false,
+    AutoWinTweenSpeed = 0.5,
+    AutoWinDelay = 0.3,
 
     -- Auto Rebirth
     AutoRebirth = false,
@@ -39,6 +58,10 @@ local State = {
 
     -- Auto Treadmill
     AutoTreadmill = false,
+
+    -- Auto Step (fires UpdateSpeed remote)
+    AutoStep = false,
+    AutoStepDelay = 0.1,
 
     -- Movement
     WalkSpeedEnabled = false,
@@ -53,10 +76,10 @@ local State = {
     -- ESP
     WinPadESP = false,
     PlayerESP = false,
+    TreadmillESP = false,
 
     -- Teleport
     ClickTP = false,
-    TP_Speed = 1,
 
     -- Anti AFK
     AntiAFK = false,
@@ -94,15 +117,214 @@ local function Disconnect(name)
     end
 end
 
-local function WaitSpawn(callback)
-    if IsAlive() then
-        callback()
-    else
-        LocalPlayer.CharacterAdded:Once(function()
-            task.wait(1)
-            callback()
-        end)
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- REMOTE SCANNER â€” find game remotes for speed/rebirth
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+local Remotes = {}
+
+local function ScanRemotes()
+    local function scan(parent, depth)
+        if depth > 5 then return end
+        for _, obj in ipairs(parent:GetChildren()) do
+            if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+                local name = obj.Name:lower()
+                if name:find("speed") or name:find("update") or name:find("step") then
+                    Remotes.UpdateSpeed = obj
+                elseif name:find("rebirth") then
+                    Remotes.Rebirth = obj
+                elseif name:find("win") then
+                    Remotes.Win = obj
+                elseif name:find("teleport") or name:find("tp") then
+                    Remotes.Teleport = obj
+                end
+            end
+            scan(obj, depth + 1)
+        end
     end
+    scan(ReplicatedStorage, 0)
+    scan(Workspace, 0)
+end
+
+pcall(ScanRemotes)
+
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- WIN PAD SCANNER
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+local function IsYellowPad(part)
+    if not part:IsA("BasePart") then return false end
+    local name = part.Name:lower()
+    if name:find("win") or name:find("trophy") or name:find("finish") or name:find("end")
+        or name:find("winpad") or name:find("winblock") or name:find("safe") then
+        return true
+    end
+    local r, g, b = part.Color.R, part.Color.G, part.Color.B
+    if r > 0.9 and g > 0.9 and b < 0.2 and part.Size.Y < 10 then
+        return true
+    end
+    return false
+end
+
+local function FindWinPads()
+    local pads = {}
+    local seen = {}
+
+    local function scan(parent)
+        for _, obj in ipairs(parent:GetChildren()) do
+            if obj:IsA("BasePart") and IsYellowPad(obj) and not seen[obj] then
+                seen[obj] = true
+                table.insert(pads, obj)
+            elseif obj:IsA("Model") then
+                local primary = obj.PrimaryPart
+                if primary and IsYellowPad(primary) and not seen[primary] then
+                    seen[primary] = true
+                    table.insert(pads, primary)
+                end
+                scan(obj)
+            elseif obj:IsA("Folder") then
+                scan(obj)
+            end
+        end
+    end
+
+    scan(Workspace)
+    return pads
+end
+
+local function GetBestWinPad()
+    local pads = FindWinPads()
+    if #pads == 0 then return nil end
+
+    local root = GetRoot()
+    if not root then return pads[1] end
+
+    -- Prefer pads by name (higher stage = more wins)
+    local best = nil
+    local bestScore = -math.huge
+
+    for _, pad in ipairs(pads) do
+        if pad and pad.Parent then
+            local score = 0
+            local name = pad.Name:lower()
+
+            -- Score by name hints
+            for stage = 15, 1, -1 do
+                if name:find(tostring(stage)) then
+                    score = score + stage * 1000
+                    break
+                end
+            end
+
+            -- Score by position (higher Z = further in World 1, higher Y = further in World 2)
+            score = score + pad.Position.Z * 0.1 + pad.Position.Y * 0.5
+
+            -- Score by distance (closer is better as tiebreaker)
+            local dist = (root.Position - pad.Position).Magnitude
+            score = score - dist * 0.01
+
+            if score > bestScore then
+                bestScore = score
+                best = pad
+            end
+        end
+    end
+
+    return best
+end
+
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- TREADMILL SCANNER
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+local function FindTreadmills()
+    local treadmills = {}
+    local seen = {}
+
+    local function scan(parent)
+        for _, obj in ipairs(parent:GetChildren()) do
+            local name = obj.Name:lower()
+            if (name:find("treadmill") or name:find("tread") or name:find("training")
+                or name:find("afk") or name:find("farm")) and not seen[obj] then
+                seen[obj] = true
+                if obj:IsA("BasePart") then
+                    table.insert(treadmills, obj)
+                elseif obj:IsA("Model") then
+                    local primary = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                    if primary then
+                        table.insert(treadmills, primary)
+                    end
+                end
+            end
+            if obj:IsA("Model") or obj:IsA("Folder") then
+                scan(obj)
+            end
+        end
+    end
+
+    scan(Workspace)
+
+    -- Also check for parts with ProximityPrompts (treadmill activation)
+    for _, prompt in ipairs(Workspace:GetDescendants()) do
+        if prompt:IsA("ProximityPrompt") then
+            local pName = prompt.ObjectText:lower()
+            if pName:find("treadmill") or pName:find("train") then
+                local parent = prompt.Parent
+                if parent and parent:IsA("BasePart") and not seen[parent] then
+                    seen[parent] = true
+                    table.insert(treadmills, parent)
+                end
+            end
+        end
+    end
+
+    return treadmills
+end
+
+local function GetBestTreadmill()
+    local treads = FindTreadmills()
+    if #treads == 0 then return nil end
+
+    local root = GetRoot()
+    if not root then return treads[1] end
+
+    -- Prefer by name (Admin > Candy > Diamond > Gold > Normal)
+    local priority = { admin = 5, candy = 4, diamond = 3, gold = 2, normal = 1 }
+
+    local best = nil
+    local bestPriority = -1
+
+    for _, tread in ipairs(treads) do
+        if tread and tread.Parent then
+            local name = tread.Name:lower()
+            local p = 1
+            for key, val in pairs(priority) do
+                if name:find(key) then
+                    p = val
+                    break
+                end
+            end
+            if p > bestPriority then
+                bestPriority = p
+                best = tread
+            end
+        end
+    end
+
+    -- Fallback: closest
+    if not best and #treads > 0 then
+        local closest = nil
+        local closestDist = math.huge
+        for _, tread in ipairs(treads) do
+            if tread and tread.Parent then
+                local dist = (root.Position - tread.Position).Magnitude
+                if dist < closestDist then
+                    closestDist = dist
+                    closest = tread
+                end
+            end
+        end
+        best = closest
+    end
+
+    return best
 end
 
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -111,7 +333,7 @@ end
 local Window = Rayfield:CreateWindow({
     Name = "OUTCOME HUB",
     LoadingTitle = "+1 Speed Keyboard Escape",
-    LoadingSubtitle = "outcome hub v1",
+    LoadingSubtitle = "outcome hub v2",
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
     KeySystem = false,
@@ -131,8 +353,7 @@ local MiscTab = Window:CreateTab("Misc", 4483362458)
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 FarmTab:CreateSection("Speed Farm")
 
--- Auto Speed: rapid micro-movements to trigger key presses
-local AutoSpeedToggle = FarmTab:CreateToggle({
+FarmTab:CreateToggle({
     Name = "Auto Speed (Key Trigger)",
     CurrentValue = false,
     Flag = "AutoSpeedFlag",
@@ -186,7 +407,7 @@ FarmTab:CreateDropdown({
 })
 
 FarmTab:CreateSlider({
-    Name = "Speed Delay (s)",
+    Name = "Speed Delay",
     Range = {0.01, 0.5},
     Increment = 0.01,
     Suffix = "s",
@@ -198,34 +419,65 @@ FarmTab:CreateSlider({
 })
 
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-FarmTab:CreateSection("Win Farm")
+FarmTab:CreateSection("Auto Step (Remote)")
 
--- Find all win pads in the workspace
-local function FindWinPads()
-    local pads = {}
-    local function scan(parent)
-        for _, obj in ipairs(parent:GetChildren()) do
-            if obj:IsA("BasePart") then
-                local name = obj.Name:lower()
-                if name:find("win") or name:find("trophy") or name:find("finish") or name:find("end") then
-                    table.insert(pads, obj)
+FarmTab:CreateToggle({
+    Name = "Auto Step (Fire UpdateSpeed)",
+    CurrentValue = false,
+    Flag = "AutoStepFlag",
+    Callback = function(Value)
+        State.AutoStep = Value
+        if Value then
+            task.spawn(function()
+                while State.AutoStep do
+                    if Remotes.UpdateSpeed then
+                        pcall(function()
+                            Remotes.UpdateSpeed:FireServer()
+                        end)
+                    end
+                    task.wait(State.AutoStepDelay)
                 end
-                if obj.Color == Color3.fromRGB(255, 255, 0) and obj.Size.Y < 5 then
-                    table.insert(pads, obj)
-                end
-            end
-            if obj:IsA("Model") or obj:IsA("Folder") then
-                scan(obj)
-            end
+            end)
         end
-    end
-    scan(Workspace)
-    return pads
-end
+    end,
+})
 
--- Auto Win: teleport to win pad positions
-local AutoWinToggle = FarmTab:CreateToggle({
-    Name = "Auto Win (Teleport to Pad)",
+FarmTab:CreateSlider({
+    Name = "Step Fire Rate",
+    Range = {0.05, 1},
+    Increment = 0.05,
+    Suffix = "s",
+    CurrentValue = 0.1,
+    Flag = "StepDelayFlag",
+    Callback = function(Value)
+        State.AutoStepDelay = Value
+    end,
+})
+
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+FarmTab:CreateSection("Auto Win")
+
+FarmTab:CreateDropdown({
+    Name = "Win Mode",
+    Options = {"Scan (Best Pad)", "World 1 (Fixed)", "World 2 (Fixed)", "World 3 (Fixed)"},
+    CurrentOption = {"Scan (Best Pad)"},
+    Flag = "WinModeFlag",
+    Callback = function(Option)
+        local opt = Option[1]
+        if opt:find("Scan") then
+            State.AutoWinMode = "Scan"
+        elseif opt:find("1") then
+            State.AutoWinMode = "World1"
+        elseif opt:find("2") then
+            State.AutoWinMode = "World2"
+        elseif opt:find("3") then
+            State.AutoWinMode = "World3"
+        end
+    end,
+})
+
+FarmTab:CreateToggle({
+    Name = "Auto Win",
     CurrentValue = false,
     Flag = "AutoWinFlag",
     Callback = function(Value)
@@ -235,27 +487,31 @@ local AutoWinToggle = FarmTab:CreateToggle({
                 while State.AutoWin do
                     local root = GetRoot()
                     if root and IsAlive() then
-                        local pads = FindWinPads()
-                        if #pads > 0 then
-                            local closest = nil
-                            local closestDist = math.huge
-                            for _, pad in ipairs(pads) do
-                                if pad and pad.Parent then
-                                    local dist = (root.Position - pad.Position).Magnitude
-                                    if dist < closestDist then
-                                        closestDist = dist
-                                        closest = pad
-                                    end
-                                end
+                        local targetPos = nil
+
+                        if State.AutoWinMode == "Scan" then
+                            local pad = GetBestWinPad()
+                            if pad then
+                                targetPos = pad.Position + Vector3.new(0, 5, 0)
                             end
-                            if closest then
+                        else
+                            targetPos = WIN_COORDS[State.AutoWinMode]
+                            if targetPos then
+                                targetPos = targetPos + Vector3.new(0, 5, 0)
+                            end
+                        end
+
+                        if targetPos then
+                            if State.AutoWinTween then
                                 local tween = TweenService:Create(
                                     root,
-                                    TweenInfo.new(State.TP_Speed, Enum.EasingStyle.Linear),
-                                    {CFrame = closest.CFrame + Vector3.new(0, 5, 0)}
+                                    TweenInfo.new(State.AutoWinTweenSpeed, Enum.EasingStyle.Linear),
+                                    {CFrame = CFrame.new(targetPos)}
                                 )
                                 tween:Play()
                                 tween.Completed:Wait()
+                            else
+                                root.CFrame = CFrame.new(targetPos)
                             end
                         end
                     end
@@ -266,16 +522,24 @@ local AutoWinToggle = FarmTab:CreateToggle({
     end,
 })
 
+FarmTab:CreateToggle({
+    Name = "Tween Mode (Smooth TP)",
+    CurrentValue = false,
+    Flag = "WinTweenFlag",
+    Callback = function(Value)
+        State.AutoWinTween = Value
+    end,
+})
+
 FarmTab:CreateSlider({
-    Name = "Win TP Speed",
+    Name = "Tween Speed",
     Range = {0.1, 3},
     Increment = 0.1,
     Suffix = "s",
     CurrentValue = 0.5,
-    Flag = "WinTPSpeedFlag",
+    Flag = "WinTweenSpeedFlag",
     Callback = function(Value)
-        State.AutoWinDelay = Value
-        State.TP_Speed = Value
+        State.AutoWinTweenSpeed = Value
     end,
 })
 
@@ -283,43 +547,51 @@ FarmTab:CreateSlider({
 FarmTab:CreateSection("Auto Rebirth")
 
 local function ClickRebirth()
-    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not playerGui then return end
+    -- Method 1: Fire remote
+    if Remotes.Rebirth then
+        pcall(function()
+            Remotes.Rebirth:FireServer()
+        end)
+    end
 
-    -- Search for rebirth button in UI
-    local function scanUI(parent)
-        for _, obj in ipairs(parent:GetChildren()) do
-            if obj:IsA("TextLabel") or obj:IsA("TextButton") then
-                local text = obj.Text:lower()
-                if text:find("rebirth") then
-                    local button = obj:FindFirstAncestorOfClass("TextButton") or obj:FindFirstAncestorOfClass("ImageButton")
-                    if button and button:IsA("GuiButton") then
-                        -- Simulate click via InputObject
-                        local pos = button.AbsolutePosition + button.AbsoluteSize / 2
-                        VirtualUser:ClickButtonAt(Vector2.new(pos.X, pos.Y))
-                        return true
+    -- Method 2: Scan UI for rebirth button
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if playerGui then
+        local function scanUI(parent)
+            for _, obj in ipairs(parent:GetChildren()) do
+                if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+                    local text = obj.Text:lower()
+                    if text:find("rebirth") then
+                        local button = obj:FindFirstAncestorOfClass("TextButton")
+                            or obj:FindFirstAncestorOfClass("ImageButton")
+                        if button then
+                            pcall(function()
+                                local pos = button.AbsolutePosition + button.AbsoluteSize / 2
+                                VirtualUser:ClickButtonAt(Vector2.new(pos.X, pos.Y))
+                            end)
+                            return true
+                        end
+                        if obj:IsA("TextButton") then
+                            obj:Activate()
+                            return true
+                        end
                     end
-                    -- Try to fire ClickDetector or activate directly
-                    if obj:IsA("TextButton") then
+                end
+                if obj:IsA("GuiButton") then
+                    local name = obj.Name:lower()
+                    if name:find("rebirth") then
                         obj:Activate()
                         return true
                     end
                 end
+                scanUI(obj)
             end
-            if obj:IsA("GuiButton") then
-                local name = obj.Name:lower()
-                if name:find("rebirth") then
-                    obj:Activate()
-                    return true
-                end
-            end
-            scanUI(obj)
         end
+        scanUI(playerGui)
     end
-    scanUI(playerGui)
 end
 
-local AutoRebirthToggle = FarmTab:CreateToggle({
+FarmTab:CreateToggle({
     Name = "Auto Rebirth",
     CurrentValue = false,
     Flag = "AutoRebirthFlag",
@@ -337,7 +609,7 @@ local AutoRebirthToggle = FarmTab:CreateToggle({
 })
 
 FarmTab:CreateSlider({
-    Name = "Rebirth Check Delay",
+    Name = "Rebirth Delay",
     Range = {0.5, 10},
     Increment = 0.5,
     Suffix = "s",
@@ -351,30 +623,7 @@ FarmTab:CreateSlider({
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 FarmTab:CreateSection("Auto Treadmill")
 
-local function FindTreadmill()
-    local function scan(parent)
-        for _, obj in ipairs(parent:GetChildren()) do
-            local name = obj.Name:lower()
-            if name:find("treadmill") or name:find("tread") then
-                if obj:IsA("BasePart") then
-                    return obj
-                end
-                if obj:IsA("Model") then
-                    local primary = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-                    if primary then return primary end
-                end
-            end
-            if obj:IsA("Model") or obj:IsA("Folder") then
-                local found = scan(obj)
-                if found then return found end
-            end
-        end
-        return nil
-    end
-    return scan(Workspace)
-end
-
-local AutoTreadmillToggle = FarmTab:CreateToggle({
+FarmTab:CreateToggle({
     Name = "Auto Treadmill (AFK Farm)",
     CurrentValue = false,
     Flag = "AutoTreadmillFlag",
@@ -385,12 +634,13 @@ local AutoTreadmillToggle = FarmTab:CreateToggle({
                 while State.AutoTreadmill do
                     local root = GetRoot()
                     if root and IsAlive() then
-                        local treadmill = FindTreadmill()
+                        local treadmill = GetBestTreadmill()
                         if treadmill then
-                            root.CFrame = treadmill.CFrame + Vector3.new(0, 3, 0)
+                            local tPos = treadmill.Position + Vector3.new(0, 3, 0)
+                            root.CFrame = CFrame.new(tPos)
                         end
                     end
-                    task.wait(5)
+                    task.wait(3)
                 end
             end)
         end
@@ -488,7 +738,6 @@ MovementTab:CreateToggle({
         if Value then
             local bodyVelocity
             local bodyGyro
-            local flying = true
 
             State.Connections.Fly = RunService.RenderStepped:Connect(function()
                 local root = GetRoot()
@@ -655,10 +904,10 @@ ESPTab:CreateToggle({
                 while State.WinPadESP do
                     ClearESP()
                     local pads = FindWinPads()
-                    for _, pad in ipairs(pads) do
+                    for i, pad in ipairs(pads) do
                         if pad and pad.Parent then
                             CreateHighlight(pad, Color3.fromRGB(255, 255, 0), "WinPad")
-                            CreateBillboard(pad, "WIN", Color3.fromRGB(255, 255, 0))
+                            CreateBillboard(pad, "WIN #" .. i, Color3.fromRGB(255, 255, 0))
                         end
                     end
                     task.wait(3)
@@ -679,7 +928,6 @@ ESPTab:CreateToggle({
         if Value then
             task.spawn(function()
                 while State.PlayerESP do
-                    ClearESP()
                     for _, player in ipairs(Players:GetPlayers()) do
                         if player ~= LocalPlayer and player.Character then
                             local root = player.Character:FindFirstChild("HumanoidRootPart")
@@ -690,6 +938,31 @@ ESPTab:CreateToggle({
                         end
                     end
                     task.wait(2)
+                end
+            end)
+        else
+            ClearESP()
+        end
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Treadmill ESP",
+    CurrentValue = false,
+    Flag = "TreadmillESPFlag",
+    Callback = function(Value)
+        State.TreadmillESP = Value
+        if Value then
+            task.spawn(function()
+                while State.TreadmillESP do
+                    local treads = FindTreadmills()
+                    for _, tread in ipairs(treads) do
+                        if tread and tread.Parent then
+                            CreateHighlight(tread, Color3.fromRGB(0, 200, 255), "Treadmill")
+                            CreateBillboard(tread, tread.Name, Color3.fromRGB(0, 200, 255))
+                        end
+                    end
+                    task.wait(3)
                 end
             end)
         else
@@ -714,13 +987,12 @@ local PlayerDropdown = TeleportTab:CreateDropdown({
             local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
             local myRoot = GetRoot()
             if targetRoot and myRoot then
-                myRoot.CFrame = targetRoot.CFrame
+                myRoot.CFrame = targetRoot.CFrame + Vector3.new(0, 3, 0)
             end
         end
     end,
 })
 
--- Refresh player list
 local function RefreshPlayerList()
     local names = {}
     for _, p in ipairs(Players:GetPlayers()) do
@@ -733,6 +1005,38 @@ TeleportTab:CreateButton({
     Name = "Refresh Player List",
     Callback = function()
         RefreshPlayerList()
+    end,
+})
+
+TeleportTab:CreateSection("World Teleport")
+
+TeleportTab:CreateButton({
+    Name = "TP to World 1 Win Zone",
+    Callback = function()
+        local root = GetRoot()
+        if root then
+            root.CFrame = CFrame.new(WIN_COORDS.World1 + Vector3.new(0, 5, 0))
+        end
+    end,
+})
+
+TeleportTab:CreateButton({
+    Name = "TP to World 2 Win Zone",
+    Callback = function()
+        local root = GetRoot()
+        if root then
+            root.CFrame = CFrame.new(WIN_COORDS.World2 + Vector3.new(0, 5, 0))
+        end
+    end,
+})
+
+TeleportTab:CreateButton({
+    Name = "TP to World 3 Win Zone",
+    Callback = function()
+        local root = GetRoot()
+        if root then
+            root.CFrame = CFrame.new(WIN_COORDS.World3 + Vector3.new(0, 5, 0))
+        end
     end,
 })
 
@@ -766,6 +1070,57 @@ TeleportTab:CreateToggle({
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 -- MISC TAB
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+MiscTab:CreateSection("Position Tracker")
+
+local PosLabelX = MiscTab:CreateLabel("X: 0")
+local PosLabelY = MiscTab:CreateLabel("Y: 0")
+local PosLabelZ = MiscTab:CreateLabel("Z: 0")
+
+State.Connections.PosTracker = RunService.Heartbeat:Connect(function()
+    local root = GetRoot()
+    if root then
+        local pos = root.Position
+        PosLabelX:Set(string.format("X: %.1f", pos.X))
+        PosLabelY:Set(string.format("Y: %.1f", pos.Y))
+        PosLabelZ:Set(string.format("Z: %.1f", pos.Z))
+    end
+end)
+
+MiscTab:CreateSection("Remote Info")
+
+local RemoteLabel = MiscTab:CreateLabel("Remotes: scanning...")
+task.spawn(function()
+    task.wait(2)
+    local info = {}
+    if Remotes.UpdateSpeed then table.insert(info, "UpdateSpeed") end
+    if Remotes.Rebirth then table.insert(info, "Rebirth") end
+    if Remotes.Win then table.insert(info, "Win") end
+    if Remotes.Teleport then table.insert(info, "Teleport") end
+    if #info == 0 then
+        RemoteLabel:Set("Remotes: none found")
+    else
+        RemoteLabel:Set("Remotes: " .. table.concat(info, ", "))
+    end
+end)
+
+MiscTab:CreateButton({
+    Name = "Rescan Remotes",
+    Callback = function()
+        Remotes = {}
+        ScanRemotes()
+        local info = {}
+        if Remotes.UpdateSpeed then table.insert(info, "UpdateSpeed") end
+        if Remotes.Rebirth then table.insert(info, "Rebirth") end
+        if Remotes.Win then table.insert(info, "Win") end
+        if Remotes.Teleport then table.insert(info, "Teleport") end
+        if #info == 0 then
+            RemoteLabel:Set("Remotes: none found")
+        else
+            RemoteLabel:Set("Remotes: " .. table.concat(info, ", "))
+        end
+    end,
+})
+
 MiscTab:CreateSection("Anti AFK")
 
 MiscTab:CreateToggle({
@@ -818,6 +1173,7 @@ MiscTab:CreateButton({
         State.AutoWin = false
         State.AutoRebirth = false
         State.AutoTreadmill = false
+        State.AutoStep = false
         State.FlyEnabled = false
         State.NoClip = false
         State.InfiniteJump = false
@@ -827,12 +1183,13 @@ MiscTab:CreateButton({
         State.AntiAFK = false
         State.WinPadESP = false
         State.PlayerESP = false
+        State.TreadmillESP = false
         Window:Destroy()
     end,
 })
 
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
--- CORE LOOPS (RenderStepped for movement)
+-- CORE LOOPS
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 RunService.RenderStepped:Connect(function()
     local hum = GetHumanoid()
@@ -848,7 +1205,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- Auto-refresh player list periodically
+-- Auto-refresh player list
 task.spawn(function()
     while task.wait(5) do
         pcall(RefreshPlayerList)
@@ -876,12 +1233,12 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 end)
 
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
--- TOAST NOTIFICATION
+-- TOAST
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 Rayfield:Notify({
     Title = "OUTCOME HUB",
-    Content = "+1 Speed Keyboard Escape loaded",
-    Duration = 3,
+    Content = "v2 loaded â€” Auto Win improved with scan + fixed coords",
+    Duration = 4,
 })
 
-print("[OUTCOME HUB] Loaded â€” +1 Speed Keyboard Escape")
+print("[OUTCOME HUB] v2 Loaded â€” +1 Speed Keyboard Escape")
