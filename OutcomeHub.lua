@@ -120,7 +120,7 @@ local KNOWN_PLACE_IDS = {
     ["2753915549"]     = "bloxfruits",     -- Blox Fruits (main)
     ["4442272183"]     = "bloxfruits",     -- Blox Fruits (second place)
     ["7449423635"]     = "bloxfruits",     -- Blox Fruits (third place)
-    ["14282329183"]    = "runaways",       -- Runaways (beta) - add actual PlaceId
+    ["14282329183"]    = "runaways",       -- Runaways (beta)
 }
 
 local function DetectGame()
@@ -150,6 +150,8 @@ local function DetectGame()
         GameName = "bloxfruits"
     elseif pn:find("runaways") then
         GameName = "runaways"
+    elseif pn:find("leaf") or pn:find("rake") or pn:find("yard") or pn:find("clean") and pn:find("leaf") then
+        GameName = "cleanleaves"
     elseif pn:find("keyboard") or pn:find("escape") or pn:find("speed") then
         GameName = "keyboardescape"
     end
@@ -176,6 +178,8 @@ task.spawn(function()
             GameName = "bloxfruits"
         elseif n:find("runaways") then
             GameName = "runaways"
+        elseif n:find("leaf") or n:find("rake") or n:find("yard") or (n:find("clean") and n:find("leaf")) then
+            GameName = "cleanleaves"
         elseif n:find("keyboard") or n:find("escape") or n:find("speed") then
             GameName = "keyboardescape"
         end
@@ -196,6 +200,7 @@ local Window = Rayfield:CreateWindow({
         or (GameName == "hypershot" and "Hypershot")
         or (GameName == "bloxfruits" and "Blox Fruits")
         or (GameName == "runaways" and "Runaways (Beta)")
+        or (GameName == "cleanleaves" and "Clean The Leaves")
         or "Game: " .. tostring(game.Name),
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
@@ -2883,6 +2888,511 @@ function require_Runaways()
     Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Runaways (Beta) loaded", Duration = 4 })
 end
 
+-- ═══════════════════════════════════════════════════════════════
+-- GAME MODULE: CLEAN THE LEAVES
+-- ═══════════════════════════════════════════════════════════════
+function require_CleanLeaves()
+    local Players = game:GetService("Players")
+    local LocalPlayer = Players.LocalPlayer
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local Workspace = game:GetService("Workspace")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local VirtualUser = game:GetService("VirtualUser")
+    local TweenService = game:GetService("TweenService")
+
+    local Camera = Workspace.CurrentCamera
+
+    local CL = {
+        -- Auto Clean
+        AutoClean = false, CleanMode = "Vacuum", CleanRadius = 50,
+        AutoCollect = false, CollectRadius = 30,
+        AutoSell = false, SellDelay = 5,
+
+        -- Tools
+        EquipBestTool = false, ToolBlacklist = {},
+
+        -- Movement
+        WalkSpeedEnabled = false, WalkSpeedValue = 30,
+        InfiniteJump = false, NoClip = false,
+        FlyEnabled = false, FlySpeed = 60,
+
+        -- Visuals
+        LeafESP = false, PileESP = false, BinESP = false,
+        PlayerESP = false,
+
+        -- Misc
+        AntiAFK = false, FullBright = false,
+        AutoUpgrade = false,
+
+        Connections = {},
+    }
+
+    local function DConn(name)
+        if CL.Connections[name] then
+            pcall(function() CL.Connections[name]:Disconnect() end)
+            CL.Connections[name] = nil
+        end
+    end
+
+    local function GetParts()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        return char, hrp, hum
+    end
+
+    local function IsAlive()
+        local _, _, hum = GetParts()
+        return hum and hum.Health > 0
+    end
+
+    -- Find leaves (parts with leaf-like names/materials)
+    local function FindLeaves()
+        local leaves = {}
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                local name = obj.Name:lower()
+                local mat = obj.Material
+                if (name:find("leaf") or name:find("foliage") or name:find("grass") 
+                    or name:find("debris") or name:find("trash") or name:find("litter"))
+                    or mat == Enum.Material.LeafyGrass or mat == Enum.Material.Grass then
+                    table.insert(leaves, obj)
+                end
+            end
+        end
+        return leaves
+    end
+
+    -- Find leaf piles / bags
+    local function FindPiles()
+        local piles = {}
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") or obj:IsA("Model") then
+                local name = obj.Name:lower()
+                if name:find("pile") or name:find("bag") or name:find("sack") 
+                    or name:find("collect") or name:find("bin") or name:find("dump") then
+                    local part = obj:IsA("BasePart") and obj or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                    if part then table.insert(piles, part) end
+                end
+            end
+        end
+        return piles
+    end
+
+    -- Find sell points / bins
+    local function FindBins()
+        local bins = {}
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                local name = obj.Name:lower()
+                if name:find("sell") or name:find("bin") or name:find("trash") 
+                    or name:find("dump") or name:find("deposit") or name:find("turnin") then
+                    table.insert(bins, obj)
+                end
+            end
+        end
+        return bins
+    end
+
+    -- Find tools in backpack/character
+    local function GetTools()
+        local tools = {}
+        local bp = LocalPlayer:FindFirstChild("Backpack")
+        if bp then
+            for _, t in ipairs(bp:GetChildren()) do
+                if t:IsA("Tool") then table.insert(tools, t) end
+            end
+        end
+        local char = LocalPlayer.Character
+        if char then
+            for _, t in ipairs(char:GetChildren()) do
+                if t:IsA("Tool") then table.insert(tools, t) end
+            end
+        end
+        return tools
+    end
+
+    -- Find best tool (leaf blower, vacuum, rake, etc.)
+    local function FindBestTool()
+        local tools = GetTools()
+        local bestTool, bestScore = nil, -1
+        for _, t in ipairs(tools) do
+            local name = t.Name:lower()
+            local score = 0
+            if name:find("vacuum") or name:find("vac") then score = 100
+            elseif name:find("blower") or name:find("leaf") then score = 90
+            elseif name:find("rake") then score = 80
+            elseif name:find("broom") or name:find("sweep") then score = 70
+            elseif name:find("collect") then score = 60
+            else score = 10 end
+            -- Check blacklist
+            local blacklisted = false
+            for _, b in ipairs(CL.ToolBlacklist) do
+                if name:find(b:lower()) then blacklisted = true; break end
+            end
+            if not blacklisted and score > bestScore then
+                bestScore = score
+                bestTool = t
+            end
+        end
+        return bestTool
+    end
+
+    -- Equip tool
+    local function EquipTool(tool)
+        if not tool then return end
+        local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if hum then hum:EquipTool(tool) end
+    end
+
+    -- Auto clean leaves
+    local function CleanLeaves()
+        if not CL.AutoClean then return end
+        local _, hrp = GetParts()
+        if not hrp then return end
+        
+        local leaves = FindLeaves()
+        local tool = CL.EquipBestTool and FindBestTool() or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool"))
+        
+        for _, leaf in ipairs(leaves) do
+            if not CL.AutoClean then break end
+            if not leaf or not leaf.Parent then continue end
+            
+            local dist = (hrp.Position - leaf.Position).Magnitude
+            if dist <= CL.CleanRadius then
+                hrp.CFrame = leaf.CFrame + Vector3.new(0, 3, 0)
+                if tool then tool:Activate() end
+                task.wait(0.1)
+            end
+        end
+    end
+
+    -- Auto collect piles
+    local function CollectPiles()
+        if not CL.AutoCollect then return end
+        local _, hrp = GetParts()
+        if not hrp then return end
+        
+        local piles = FindPiles()
+        for _, pile in ipairs(piles) do
+            if not CL.AutoCollect then break end
+            if not pile or not pile.Parent then continue end
+            
+            local dist = (hrp.Position - pile.Position).Magnitude
+            if dist <= CL.CollectRadius then
+                hrp.CFrame = pile.CFrame + Vector3.new(0, 3, 0)
+                task.wait(0.2)
+                -- Try proximity prompt
+                local prompt = pile:FindFirstChildWhichIsA("ProximityPrompt")
+                if prompt then pcall(function() fireproximityprompt(prompt) end) end
+            end
+        end
+    end
+
+    -- Auto sell
+    local function SellLeaves()
+        if not CL.AutoSell then return end
+        local _, hrp = GetParts()
+        if not hrp then return end
+        
+        local bins = FindBins()
+        if #bins > 0 then
+            local nearest = bins[1]
+            local nearestDist = (hrp.Position - nearest.Position).Magnitude
+            for _, b in ipairs(bins) do
+                local d = (hrp.Position - b.Position).Magnitude
+                if d < nearestDist then nearestDist = d; nearest = b end
+            end
+            hrp.CFrame = nearest.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.5)
+            -- Try proximity prompt
+            local prompt = nearest:FindFirstChildWhichIsA("ProximityPrompt")
+            if prompt then pcall(function() fireproximityprompt(prompt) end) end
+        end
+    end
+
+    -- ESP
+    local ESPItems = {}
+    local function ClearESP()
+        for _, v in ipairs(ESPItems) do pcall(function() v:Destroy() end) end
+        ESPItems = {}
+    end
+
+    local function MakeESP(obj, color, text)
+        if not obj or not obj.Parent then return end
+        local hl = Instance.new("Highlight")
+        hl.Name = "_CL_ESP"
+        hl.FillColor = color
+        hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+        hl.FillTransparency = 0.5
+        hl.Adornee = obj
+        hl.Parent = obj
+        table.insert(ESPItems, hl)
+        if text then
+            local bb = Instance.new("BillboardGui")
+            bb.Name = "_CL_LABEL"
+            bb.Size = UDim2.new(0, 120, 0, 30)
+            bb.StudsOffset = Vector3.new(0, 3, 0)
+            bb.AlwaysOnTop = true
+            bb.Adornee = obj
+            bb.Parent = obj
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(1, 0, 1, 0)
+            lbl.BackgroundTransparency = 1
+            lbl.Text = text
+            lbl.TextColor3 = color
+            lbl.TextStrokeTransparency = 0.3
+            lbl.TextScaled = true
+            lbl.Font = Enum.Font.GothamBold
+            lbl.Parent = bb
+            table.insert(ESPItems, bb)
+        end
+    end
+
+    local function ESPLoop()
+        while CL.LeafESP or CL.PileESP or CL.BinESP or CL.PlayerESP do
+            if CL.LeafESP then
+                for _, leaf in ipairs(FindLeaves()) do
+                    if leaf and leaf.Parent and not leaf:FindFirstChild("_CL_ESP") then
+                        MakeESP(leaf, Color3.fromRGB(100, 255, 100), "Leaf")
+                    end
+                end
+            end
+            if CL.PileESP then
+                for _, pile in ipairs(FindPiles()) do
+                    if pile and pile.Parent and not pile:FindFirstChild("_CL_ESP") then
+                        MakeESP(pile, Color3.fromRGB(255, 200, 0), "Pile")
+                    end
+                end
+            end
+            if CL.BinESP then
+                for _, bin in ipairs(FindBins()) do
+                    if bin and bin.Parent and not bin:FindFirstChild("_CL_ESP") then
+                        MakeESP(bin, Color3.fromRGB(0, 200, 255), "Sell Bin")
+                    end
+                end
+            end
+            if CL.PlayerESP then
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl ~= LocalPlayer and pl.Character and pl.Character:FindFirstChild("HumanoidRootPart") and not pl.Character:FindFirstChild("_CL_ESP") then
+                        MakeESP(pl.Character, Color3.fromRGB(80, 170, 255), pl.Name)
+                    end
+                end
+            end
+            task.wait(2)
+        end
+    end
+
+    -- Fullbright
+    local function ToggleFullBright(v)
+        CL.FullBright = v
+        local Lighting = game:GetService("Lighting")
+        if v then
+            Lighting.Brightness = 2
+            Lighting.ClockTime = 14
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = false
+            Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+        else
+            Lighting.Brightness = 1
+            Lighting.ClockTime = 14
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = true
+            Lighting.OutdoorAmbient = Color3.new(0.5, 0.5, 0.5)
+        end
+    end
+
+    -- TABS
+    local MainTab = Window:CreateTab("Main", 4483362458)
+    local ToolTab = Window:CreateTab("Tools", 4483362458)
+    local MoveTab = Window:CreateTab("Movement", 4483362458)
+    local ESPTab = Window:CreateTab("ESP", 4483362458)
+    local MiscTab = Window:CreateTab("Misc", 4483362458)
+
+    -- MAIN
+    MainTab:CreateSection("Auto Clean")
+    MainTab:CreateToggle({ Name = "Auto Clean Leaves", CurrentValue = false, Flag = "CLAutoCleanFlag",
+        Callback = function(v)
+            CL.AutoClean = v
+            if v then task.spawn(function()
+                while CL.AutoClean do
+                    CleanLeaves()
+                    task.wait(0.5)
+                end
+            end) end
+        end })
+    MainTab:CreateDropdown({ Name = "Clean Mode", Options = {"Vacuum", "Blower", "Rake", "All"}, CurrentOption = {"Vacuum"}, Flag = "CLCleanModeFlag",
+        Callback = function(o) CL.CleanMode = o[1] end })
+    MainTab:CreateSlider({ Name = "Clean Radius", Range = {10, 200}, Increment = 5, Suffix = " studs", CurrentValue = 50, Flag = "CLCleanRadiusFlag",
+        Callback = function(v) CL.CleanRadius = v end })
+
+    MainTab:CreateSection("Auto Collect Piles")
+    MainTab:CreateToggle({ Name = "Auto Collect Piles/Bags", CurrentValue = false, Flag = "CLAutoCollectFlag",
+        Callback = function(v)
+            CL.AutoCollect = v
+            if v then task.spawn(function()
+                while CL.AutoCollect do
+                    CollectPiles()
+                    task.wait(1)
+                end
+            end) end
+        end })
+    MainTab:CreateSlider({ Name = "Collect Radius", Range = {10, 100}, Increment = 5, Suffix = " studs", CurrentValue = 30, Flag = "CLCollectRadiusFlag",
+        Callback = function(v) CL.CollectRadius = v end })
+
+    MainTab:CreateSection("Auto Sell")
+    MainTab:CreateToggle({ Name = "Auto Sell at Bin", CurrentValue = false, Flag = "CLAutoSellFlag",
+        Callback = function(v)
+            CL.AutoSell = v
+            if v then task.spawn(function()
+                while CL.AutoSell do
+                    SellLeaves()
+                    task.wait(CL.SellDelay)
+                end
+            end) end
+        end })
+    MainTab:CreateSlider({ Name = "Sell Delay", Range = {1, 30}, Increment = 1, Suffix = "s", CurrentValue = 5, Flag = "CLSellDelayFlag",
+        Callback = function(v) CL.SellDelay = v end })
+
+    -- TOOLS
+    ToolTab:CreateSection("Tool Management")
+    ToolTab:CreateToggle({ Name = "Auto Equip Best Tool", CurrentValue = false, Flag = "CLEquipBestFlag",
+        Callback = function(v)
+            CL.EquipBestTool = v
+            if v then task.spawn(function()
+                while CL.EquipBestTool do
+                    local tool = FindBestTool()
+                    if tool then EquipTool(tool) end
+                    task.wait(3)
+                end
+            end) end
+        end })
+    ToolTab:CreateButton({ Name = "Print Tool Names", Callback = function()
+        local tools = GetTools()
+        for _, t in ipairs(tools) do print("Tool: " .. t.Name) end
+        Rayfield:Notify({ Title = "Tools Found", Content = #tools .. " tools in backpack/character", Duration = 3 })
+    end })
+    ToolTab:CreateLabel("Blacklist (comma-separated):")
+    ToolTab:CreateInput({ Name = "Add to Blacklist", PlaceholderText = "tool name", Flag = "CLBlacklistInput",
+        Callback = function(v)
+            for name in v:gmatch("([^,]+)") do
+                table.insert(CL.ToolBlacklist, name:match("^%s*(.-)%s*$"))
+            end
+        end })
+
+    -- MOVEMENT
+    MoveTab:CreateSection("Speed & Jump")
+    MoveTab:CreateToggle({ Name = "Custom WalkSpeed", CurrentValue = false, Flag = "CLWalkFlag",
+        Callback = function(v) CL.WalkSpeedEnabled = v; if not v then local _, _, hum = GetParts(); if hum then hum.WalkSpeed = 16 end end end })
+    MoveTab:CreateSlider({ Name = "WalkSpeed", Range = {16, 150}, Increment = 1, Suffix = " studs/s", CurrentValue = 30, Flag = "CLWalkValFlag",
+        Callback = function(v) CL.WalkSpeedValue = v end })
+    MoveTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "CLInfJumpFlag",
+        Callback = function(v)
+            CL.InfiniteJump = v
+            if v then CL.Connections.InfJump = UserInputService.JumpRequest:Connect(function() if CL.InfiniteJump and IsAlive() then local _, _, hum = GetParts(); if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end end end)
+            else DConn("InfJump") end
+        end })
+
+    MoveTab:CreateSection("Fly & NoClip")
+    MoveTab:CreateToggle({ Name = "Fly (W/Space/Shift)", CurrentValue = false, Flag = "CLFlyFlag",
+        Callback = function(v)
+            CL.FlyEnabled = v
+            if v then
+                local bv, bg
+                CL.Connections.Fly = RunService.RenderStepped:Connect(function()
+                    local _, hrp, hum = GetParts()
+                    if not (hrp and hum and IsAlive()) then CL.FlyEnabled = false; if bv then bv:Destroy() end; if bg then bg:Destroy() end; DConn("Fly"); return end
+                    if not bv then
+                        bv = Instance.new("BodyVelocity"); bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge); bv.Velocity = Vector3.zero; bv.Parent = hrp
+                        bg = Instance.new("BodyGyro"); bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge); bg.P = 9000; bg.D = 500; bg.Parent = hrp
+                    end
+                    local md = Vector3.zero; local cam = Camera.CFrame
+                    if UserInputService:IsKeyDown(Enum.KeyCode.W) then md = md + cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.S) then md = md - cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.A) then md = md - cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.D) then md = md + cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then md = md + Vector3.new(0, 1, 0) end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then md = md - Vector3.new(0, 1, 0) end
+                    if md.Magnitude > 0 then md = md.Unit * CL.FlySpeed end
+                    bv.Velocity = md; bg.CFrame = cam
+                end)
+            else
+                DConn("Fly")
+                local _, hrp = GetParts()
+                if hrp then for _, v in ipairs(hrp:GetChildren()) do if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then v:Destroy() end end end
+            end
+        end })
+    MoveTab:CreateSlider({ Name = "Fly Speed", Range = {10, 200}, Increment = 5, Suffix = " studs/s", CurrentValue = 60, Flag = "CLFlySpeedFlag",
+        Callback = function(v) CL.FlySpeed = v end })
+    MoveTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "CLNoClipFlag",
+        Callback = function(v)
+            CL.NoClip = v
+            if v then CL.Connections.NoClip = RunService.Stepped:Connect(function() if CL.NoClip then local c = LocalPlayer.Character; if c then for _, p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end end end)
+            else DConn("NoClip") end
+        end })
+
+    -- ESP
+    ESPTab:CreateSection("Visuals")
+    ESPTab:CreateToggle({ Name = "Leaf ESP", CurrentValue = false, Flag = "CLLeafESPFlag",
+        Callback = function(v)
+            CL.LeafESP = v
+            if v then ClearESP(); task.spawn(ESPLoop) else ClearESP() end
+        end })
+    ESPTab:CreateToggle({ Name = "Pile/Bag ESP", CurrentValue = false, Flag = "CLPileESPFlag",
+        Callback = function(v)
+            CL.PileESP = v
+            if v then ClearESP(); task.spawn(ESPLoop) else ClearESP() end
+        end })
+    ESPTab:CreateToggle({ Name = "Sell Bin ESP", CurrentValue = false, Flag = "CLBinESPFlag",
+        Callback = function(v)
+            CL.BinESP = v
+            if v then ClearESP(); task.spawn(ESPLoop) else ClearESP() end
+        end })
+    ESPTab:CreateToggle({ Name = "Player ESP", CurrentValue = false, Flag = "CLPlayerESPFlag",
+        Callback = function(v)
+            CL.PlayerESP = v
+            if v then ClearESP(); task.spawn(ESPLoop) else ClearESP() end
+        end })
+    ESPTab:CreateButton({ Name = "Clear All ESP", Callback = ClearESP })
+
+    -- MISC
+    MiscTab:CreateSection("Utility")
+    MiscTab:CreateToggle({ Name = "FullBright", CurrentValue = false, Flag = "CLFullBrightFlag",
+        Callback = function(v) ToggleFullBright(v) end })
+
+    MiscTab:CreateSection("Anti AFK")
+    MiscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "CLAntiAFKFlag",
+        Callback = function(v)
+            CL.AntiAFK = v
+            if v then CL.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
+            else DConn("AntiAFK") end
+        end })
+
+    MiscTab:CreateSection("Cleanup")
+    MiscTab:CreateButton({ Name = "Destroy UI",
+        Callback = function()
+            ClearESP()
+            for name, _ in pairs(CL.Connections) do DConn(name) end
+            CL.AutoClean = false; CL.AutoCollect = false; CL.AutoSell = false
+            CL.EquipBestTool = false; CL.WalkSpeedEnabled = false; CL.InfiniteJump = false
+            CL.NoClip = false; CL.FlyEnabled = false
+            CL.LeafESP = false; CL.PileESP = false; CL.BinESP = false; CL.PlayerESP = false
+            CL.FullBright = false; CL.AntiAFK = false
+            Window:Destroy()
+        end })
+
+    -- Core loop
+    RunService.RenderStepped:Connect(function()
+        local _, _, hum = GetParts()
+        if hum then
+            if CL.WalkSpeedEnabled then hum.WalkSpeed = CL.WalkSpeedValue end
+        end
+    end)
+
+    Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Clean The Leaves loaded", Duration = 4 })
+end
+
 -- LAUNCH
 -- ══════════════════════════════════════════════════════════════
 local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/KeyboardEscapeHub.lua'
@@ -2910,6 +3420,7 @@ local function ShowHomeTab()
     HomeTab:CreateButton({ Name = "Reload as Hypershot", Callback = function() Reload("hypershot") end })
     HomeTab:CreateButton({ Name = "Reload as Blox Fruits", Callback = function() Reload("bloxfruits") end })
     HomeTab:CreateButton({ Name = "Reload as Runaways (Beta)", Callback = function() Reload("runaways") end })
+    HomeTab:CreateButton({ Name = "Reload as Clean The Leaves", Callback = function() Reload("cleanleaves") end })
 end
 
 local Launched = false
@@ -2930,6 +3441,8 @@ function LaunchGame()
         ok, err = pcall(require_BloxFruits)
     elseif GameName == "runaways" then
         ok, err = pcall(require_Runaways)
+    elseif GameName == "cleanleaves" then
+        ok, err = pcall(require_CleanLeaves)
     else
         Launched = false
         ShowHomeTab()
@@ -2953,7 +3466,7 @@ if not Launched then
     task.spawn(function()
         task.wait(3)
         if Launched then return end
-        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" or GameName == "hypershot" or GameName == "bloxfruits" or GameName == "runaways" then
+        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" or GameName == "hypershot" or GameName == "bloxfruits" or GameName == "runaways" or GameName == "cleanleaves" then
             Reload(GameName)
         end
     end)
