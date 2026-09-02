@@ -566,15 +566,17 @@ end
 
 RefreshCoordStatus()
 
-FarmTab:CreateSlider({
-    Name = "Stage Number (1-15)",
-    Range = {1, 15},
-    Increment = 1,
-    Suffix = "",
-    CurrentValue = 1,
+FarmTab:CreateDropdown({
+    Name = "Select Stage",
+    Options = {"Stage 1", "Stage 2", "Stage 3", "Stage 4", "Stage 5", "Stage 6",
+               "Stage 7", "Stage 8", "Stage 9", "Stage 10", "Stage 11", "Stage 12",
+               "Stage 13", "Stage 14", "Stage 15"},
+    CurrentOption = {"Stage 1"},
     Flag = "SelectedStageFlag",
-    Callback = function(Value)
-        SelectedStage = Value
+    Callback = function(Option)
+        local name = Option[1] or "Stage 1"
+        local num = tonumber(name:match("%d+")) or 1
+        SelectedStage = num
     end,
 })
 
