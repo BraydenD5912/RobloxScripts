@@ -967,6 +967,7 @@ function require_Sniper()
         Aimbot = false, AimFOV = 20, AimTeam = true,
         AimConfig = "Legit", -- "Legit" or "Rage"
         AimHitbox = "Head",
+        AimKey = Enum.KeyCode.LeftButton, -- key held to drive aimbot
         LegitSmooth = 0.25, LegitOffset = 0.6, -- offset in studs (humanized miss window)
         Triggerbot = false,
         ESP = false, ESPTeamOnly = true,
@@ -1052,7 +1053,7 @@ function require_Sniper()
             if not S.Aimbot then break end
             local cam = Camera
             if not cam then break end
-            local firing = UserInputService:IsKeyDown(Enum.KeyCode.LeftButton) or S.Triggerbot
+            local firing = UserInputService:IsKeyDown(S.AimKey) or S.Triggerbot
             if firing then
                 local fov = (S.AimConfig == "Rage") and 360 or S.AimFOV
                 local camPos, camLook = cam.CFrame.Position, cam.CFrame.LookVector
@@ -1119,6 +1120,13 @@ function require_Sniper()
         Callback = function(v)
             S.Aimbot = v
             if v then task.spawn(AimbotLoop) end
+        end })
+    AimTab:CreateDropdown({ Name = "Hold Key for Aimbot", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Middle","Mouse Button 4","Mouse Button 5"},
+        CurrentOption = {"Left Mouse"}, Flag = "SDAimKeyFlag",
+        Callback = function(o)
+            local k = o[1]
+            local map = { ["Left Mouse"] = Enum.KeyCode.LeftMouse, ["Right Mouse"] = Enum.KeyCode.RightMouse, ["Mouse Middle"] = Enum.KeyCode.MiddleMouse, ["Mouse Button 4"] = Enum.KeyCode.Button4, ["Mouse Button 5"] = Enum.KeyCode.Button5 }
+            S.AimKey = map[k] or Enum.KeyCode[k] or Enum.KeyCode.LeftButton
         end })
     AimTab:CreateToggle({ Name = "Triggerbot (aim while just aiming)", CurrentValue = false, Flag = "SDTriggerFlag",
         Callback = function(v) S.Triggerbot = v end })
@@ -1284,6 +1292,7 @@ function require_Hypershot()
 
     local H = {
         Aimbot = false, AimFOV = 25, AimTeam = true, AimConfig = "Legit", AimHitbox = "Head",
+        AimKey = Enum.KeyCode.LeftButton, -- key held to drive aimbot
         LegitSmooth = 0.25, LegitOffset = 0.6,
         Triggerbot = false, AutoFire = false,
         ESP = false, TeamESP = false,
@@ -1365,7 +1374,7 @@ function require_Hypershot()
             if not cam then break end
             local myC, myHrp = Util()
             if not (myC and myHrp) then break end
-            local holding = UserInputService:IsKeyDown(Enum.KeyCode.LeftButton)
+            local holding = UserInputService:IsKeyDown(H.AimKey)
             local wantShoot = holding or H.Triggerbot
             if wantShoot and H.Aimbot then
                 local fov = (H.AimConfig == "Rage") and 360 or H.AimFOV
@@ -1505,6 +1514,13 @@ function require_Hypershot()
         Callback = function(v)
             H.Aimbot = v
             if v then task.spawn(AimbotLoop) end
+        end })
+    AimTab:CreateDropdown({ Name = "Hold Key for Aimbot", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Middle","Mouse Button 4","Mouse Button 5"},
+        CurrentOption = {"Left Mouse"}, Flag = "HSAimKeyFlag",
+        Callback = function(o)
+            local k = o[1]
+            local map = { ["Left Mouse"] = Enum.KeyCode.LeftMouse, ["Right Mouse"] = Enum.KeyCode.RightMouse, ["Mouse Middle"] = Enum.KeyCode.MiddleMouse, ["Mouse Button 4"] = Enum.KeyCode.Button4, ["Mouse Button 5"] = Enum.KeyCode.Button5 }
+            H.AimKey = map[k] or Enum.KeyCode[k] or Enum.KeyCode.LeftButton
         end })
     AimTab:CreateToggle({ Name = "Triggerbot (aim + shoot while just aiming)", CurrentValue = false, Flag = "HSTrigFlag",
         Callback = function(v) H.Triggerbot = v end })
