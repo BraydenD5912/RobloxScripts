@@ -81,7 +81,8 @@ local GameId = tostring(game.PlaceId)
 local KNOWN_PLACE_IDS = {
     ["95082159892680"] = "keyboardescape", -- +1 Speed Keyboard Escape (root)
     ["9584852943"]     = "keyboardescape", -- +1 Speed Keyboard Escape (version)
-    ["14259168147"]    = "basketball",     -- Basketball Legends
+    ["14259168147"]    = "basketball",     -- Basketball Legends (older/universe)
+    ["71832465156084"] = "basketball",     -- Basketball Legends (current)
 }
 
 local function DetectGame()
