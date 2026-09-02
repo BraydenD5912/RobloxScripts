@@ -957,7 +957,10 @@ end
 -- ══════════════════════════════════════════════════════════════
 function require_Sniper()
     local S = {
-        Aimbot = false, AimMode = "Head", AimFOV = 20, AimTeam = true,
+        Aimbot = false, AimFOV = 20, AimTeam = true,
+        AimConfig = "Legit", -- "Legit" or "Rage"
+        AimHitbox = "Head",
+        LegitSmooth = 0.25, LegitOffset = 0.6, -- offset in studs (humanized miss window)
         Triggerbot = false,
         ESP = false, ESPTeamOnly = true,
         WalkSpeedEnabled = false, WalkSpeedValue = 40,
@@ -1002,35 +1005,67 @@ function require_Sniper()
         return out
     end
 
-    -- Aimbot: rotate camera toward nearest enemy (within FOV) when aiming key held
+    -- Where on the target to aim
+    local function GetTargetPoint(char, hrp)
+        local part
+        if S.AimHitbox == "Head" then
+            part = char:FindFirstChild("Head")
+        elseif S.AimHitbox == "Body" then
+            part = char:FindFirstChild("HumanoidRootPart") or hrp
+        else
+            part = char:FindFirstChild("HumanoidRootPart") or hrp
+        end
+        if part then
+            return part.Position + Vector3.new(0, (S.AimHitbox == "Head" and 0.3) or 0, 0)
+        end
+        return hrp.Position + Vector3.new(0, 2, 0)
+    end
+
+    -- Choose closest valid target within FOV
+    local function PickTarget(camPos, look, fov)
+        local targets = GetCameraTargetList()
+        local best, bd = nil, fov
+        for _, t in ipairs(targets) do
+            local pos = GetTargetPoint(t.char, t.hrp)
+            local dir = (pos - camPos)
+            if dir.Magnitude < 0.01 then dir = Vector3.new(0, 0, 0.01) end
+            local ang = math.deg(math.acos(math.clamp(dir.Unit:Dot(look), -1, 1)))
+            if ang <= bd then
+                bd = ang
+                best = { pos = pos, t = t }
+            end
+        end
+        return best
+    end
+
+    -- Aimbot loop with Legit/Rage configs
     local function AimbotLoop()
         while S.Aimbot do
             task.wait()
             if not S.Aimbot then break end
             local cam = Camera
-            if cam then
-                local camPos = cam.CFrame.Position
-            local targets = GetCameraTargetList()
-            local best, bd = nil, S.AimFOV
-            for _, t in ipairs(targets) do
-                local pos
-                if S.AimMode == "Head" then
-                    local h = t.char:FindFirstChild("Head")
-                    pos = h and h.Position or t.hrp.Position + Vector3.new(0, 2, 0)
-                else
-                    pos = t.hrp.Position
+            if not cam then break end
+            local firing = UserInputService:IsKeyDown(Enum.KeyCode.LeftButton) or S.Triggerbot
+            if firing then
+                local fov = (S.AimConfig == "Rage") and 360 or S.AimFOV
+                local camPos, camLook = cam.CFrame.Position, cam.CFrame.LookVector
+                local best = PickTarget(camPos, camLook, fov)
+
+                if best then
+                    if S.AimConfig == "Rage" then
+                        -- Instant hard snap to target
+                        cam.CFrame = CFrame.lookAt(camPos, best.pos)
+                    else
+                        -- Legit: smooth lerp toward a slightly off-center point (human miss window)
+                        local aimPos = best.pos + Vector3.new(
+                            (math.random() - 0.5) * S.LegitOffset,
+                            (math.random() - 0.5) * S.LegitOffset,
+                            0)
+                        local newLook = CFrame.lookAt(camPos, aimPos)
+                        local t = math.clamp(S.LegitSmooth, 0.05, 1)
+                        cam.CFrame = cam.CFrame:Lerp(newLook, t)
+                    end
                 end
-                local dir = (pos - camPos)
-                local look = cam.CFrame.LookVector
-                local ang = math.deg(math.acos(math.clamp(dir.Unit:Dot(look), -1, 1)))
-                if ang <= bd then
-                    bd = ang
-                    best = { pos = pos, t = t }
-                end
-            end
-            if best and (UserInputService:IsKeyDown(Enum.KeyCode.LeftButton) or S.Triggerbot) then
-                cam.CFrame = CFrame.lookAt(camPos, best.pos)
-            end
             end
         end
     end
@@ -1080,10 +1115,24 @@ function require_Sniper()
         end })
     AimTab:CreateToggle({ Name = "Triggerbot (aim while just aiming)", CurrentValue = false, Flag = "SDTriggerFlag",
         Callback = function(v) S.Triggerbot = v end })
-    AimTab:CreateDropdown({ Name = "Aim Target", Options = {"Head","Body"}, CurrentOption = {"Head"}, Flag = "SDAimModeFlag",
-        Callback = function(o) S.AimMode = o[1] end })
-    AimTab:CreateSlider({ Name = "Aimbot FOV", Range = {5,90}, Increment = 1, Suffix = " deg", CurrentValue = 20, Flag = "SDAimFOVFlag",
+    AimTab:CreateSection("Config")
+    AimTab:CreateDropdown({ Name = "Aimbot Config", Options = {"Legit","Rage"}, CurrentOption = {"Legit"}, Flag = "SDAimConfigFlag",
+        Callback = function(o)
+            S.AimConfig = o[1]
+        end })
+    AimTab:CreateDropdown({ Name = "Hitbox", Options = {"Head","Body"}, CurrentOption = {"Head"}, Flag = "SDAimHitboxFlag",
+        Callback = function(o) S.AimHitbox = o[1] end })
+    AimTab:CreateSlider({ Name = "Aimbot FOV (Legit)", Range = {5,120}, Increment = 1, Suffix = " deg", CurrentValue = 20, Flag = "SDAimFOVFlag",
         Callback = function(v) S.AimFOV = v end })
+
+    AimTab:CreateSection("Legit Smoothing")
+    AimTab:CreateSlider({ Name = "Aim Smoothness", Range = {0.05,1}, Increment = 0.01, Suffix = "", CurrentValue = 0.25, Flag = "SDLegitSmoothFlag",
+        Callback = function(v) S.LegitSmooth = v end })
+    AimTab:CreateSlider({ Name = "Human Miss Offset (studs)", Range = {0,3}, Increment = 0.1, Suffix = "", CurrentValue = 0.6, Flag = "SDLegitOffsetFlag",
+        Callback = function(v) S.LegitOffset = v end })
+
+    AimTab:CreateSection("Rage")
+    AimTab:CreateLabel("Rage: instant snap to target, 360 FOV")
     AimTab:CreateToggle({ Name = "Target Enemies Only (Team based)", CurrentValue = true, Flag = "SDAimTeamFlag",
         Callback = function(v) S.AimTeam = v end })
 
