@@ -1595,10 +1595,12 @@ local function Reload(gameName)
 end
 
 local HomeBuilt = false
+local HomeTabRef = nil
 local function ShowHomeTab()
-    if HomeBuilt then return end
+    if HomeBuilt then return HomeTabRef end
     HomeBuilt = true
     local HomeTab = Window:CreateTab("Info", 4483362458)
+    HomeTabRef = HomeTab
     HomeTab:CreateSection("Game Not Detected")
     HomeTab:CreateLabel("Game: " .. tostring(game.Name))
     HomeTab:CreateLabel("PlaceId: " .. tostring(game.PlaceId))
@@ -1612,17 +1614,25 @@ local Launched = false
 function LaunchGame()
     if Launched then return end
     Launched = true
+    local ok, err
     if GameName == "keyboardescape" then
-        require_KeyboardEscape()
+        ok, err = pcall(require_KeyboardEscape)
     elseif GameName == "basketball" then
-        require_Basketball()
+        ok, err = pcall(require_Basketball)
     elseif GameName == "sniper" then
-        require_Sniper()
+        ok, err = pcall(require_Sniper)
     elseif GameName == "hypershot" then
-        require_Hypershot()
+        ok, err = pcall(require_Hypershot)
     else
         Launched = false
         ShowHomeTab()
+        return
+    end
+    if not ok then
+        Launched = false
+        warn("[OUTCOME HUB] Launch error: " .. tostring(err))
+        local ht = ShowHomeTab()
+        if ht then ht:CreateLabel("Load failed: " .. tostring(err)) end
     end
 end
 
