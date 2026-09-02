@@ -44,6 +44,8 @@ local STAGE_CFAMES = {
     [15] = nil,
 }
 
+local TREADMILL_CF = CFrame.new(18.0236549, 7.54272556, -40.5097961)
+
 local WIN_COORDS = {
     World1 = Vector3.new(-14003.95, 750.54, 3066),
     World2 = Vector3.new(7984, 728, 5144),
@@ -70,7 +72,7 @@ local State = {
     AutoWin = false,
     AutoWinTween = false,
     AutoWinTweenSpeed = 0.5,
-    AutoWinDelay = 0.3,
+    AutoWinDelay = 3,
 
     -- Auto Rebirth
     AutoRebirth = false,
@@ -688,6 +690,18 @@ FarmTab:CreateSlider({
     end,
 })
 
+FarmTab:CreateSlider({
+    Name = "Auto Win Delay (between TPs)",
+    Range = {0.5, 10},
+    Increment = 0.5,
+    Suffix = "s",
+    CurrentValue = 3,
+    Flag = "WinDelayFlag",
+    Callback = function(Value)
+        State.AutoWinDelay = Value
+    end,
+})
+
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 FarmTab:CreateSection("Auto Rebirth")
 
@@ -777,12 +791,19 @@ FarmTab:CreateToggle({
         if Value then
             task.spawn(function()
                 while State.AutoTreadmill do
+                    if State.AutoWin then break end
                     local root = GetRoot()
                     if root and IsAlive() then
-                        local treadmill = GetBestTreadmill()
-                        if treadmill then
-                            local tPos = treadmill.Position + Vector3.new(0, 3, 0)
-                            root.CFrame = CFrame.new(tPos)
+                        -- Prefer hardcoded treadmill coords, else scan
+                        local targetCF = TREADMILL_CF
+                        if not targetCF then
+                            local treadmill = GetBestTreadmill()
+                            if treadmill then
+                                targetCF = treadmill.CFrame
+                            end
+                        end
+                        if targetCF then
+                            root.CFrame = targetCF + Vector3.new(0, 3, 0)
                         end
                     end
                     task.wait(3)
