@@ -5,6 +5,7 @@
 -- ══════════════════════════════════════════════════════════════
 
 local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua'))()
+print("[OUTCOME HUB] step 1: Rayfield loaded")
 
 -- ══════════════════════════════════════════════════════════════
 -- SERVICES (shared)
@@ -156,6 +157,7 @@ local Window = Rayfield:CreateWindow({
     Discord = { Enabled = false },
     KeySystem = false,
 })
+print("[OUTCOME HUB] step 2: Window created — GameName=" .. GameName)
 
 -- ══════════════════════════════════════════════════════════════
 -- GAME MODULE: +1 SPEED KEYBOARD ESCAPE
@@ -1612,6 +1614,7 @@ end
 
 local Launched = false
 function LaunchGame()
+    print("[OUTCOME HUB] step 3: LaunchGame — GameName=" .. GameName)
     if Launched then return end
     Launched = true
     local ok, err
@@ -1631,8 +1634,11 @@ function LaunchGame()
     if not ok then
         Launched = false
         warn("[OUTCOME HUB] Launch error: " .. tostring(err))
+        print("[OUTCOME HUB] step 4: module FAILED with: " .. tostring(err))
         local ht = ShowHomeTab()
         if ht then ht:CreateLabel("Load failed: " .. tostring(err)) end
+    else
+        print("[OUTCOME HUB] step 4: module loaded ok")
     end
 end
 
