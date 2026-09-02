@@ -1078,6 +1078,11 @@ function require_Sniper()
         return best
     end
 
+    -- Move mouse toward a world position (works in first-person FPS by feeding the
+    -- game's own camera controller mouse deltas).
+    local hasMMRel = (mousemoverel ~= nil)
+    local hasMMAabs = (mousemoveabs ~= nil)
+
     -- Aimbot loop with Legit/Rage configs
     local function AimbotLoop()
         while S.Aimbot do
@@ -1092,18 +1097,40 @@ function require_Sniper()
                 local best = PickTarget(camPos, camLook, fov)
 
                 if best then
+                    local aimPos = best.pos
                     if S.AimConfig == "Rage" then
-                        -- Instant hard snap to target
-                        cam.CFrame = CFrame.lookAt(camPos, best.pos)
+                        -- instant hard snap to target
+                        local sp = cam:WorldToScreenPoint(aimPos)
+                        if sp.Z >= 0 then
+                            if hasMMRel then
+                                local mp = UserInputService:GetMouseLocation()
+                                mousemoverel(sp.X - mp.X, sp.Y - mp.Y)
+                            elseif hasMMAabs then
+                                mousemoveabs(sp.X, sp.Y)
+                            else
+                                cam.CFrame = CFrame.lookAt(camPos, aimPos)
+                            end
+                        end
                     else
-                        -- Legit: smooth lerp toward a slightly off-center point (human miss window)
-                        local aimPos = best.pos + Vector3.new(
+                        -- Legit: aim slightly off-center (human miss window) + smooth
+                        aimPos = best.pos + Vector3.new(
                             (math.random() - 0.5) * S.LegitOffset,
-                            (math.random() - 0.5) * S.LegitOffset,
-                            0)
-                        local newLook = CFrame.lookAt(camPos, aimPos)
-                        local t = math.clamp(S.LegitSmooth, 0.05, 1)
-                        cam.CFrame = cam.CFrame:Lerp(newLook, t)
+                            (math.random() - 0.5) * S.LegitOffset, 0)
+                        local sp = cam:WorldToScreenPoint(aimPos)
+                        if sp.Z >= 0 and (hasMMRel or hasMMAabs) then
+                            local mp = UserInputService:GetMouseLocation()
+                            local t = math.clamp(S.LegitSmooth, 0.05, 1)
+                            local mdx, mdy = (sp.X - mp.X) * t, (sp.Y - mp.Y) * t
+                            if hasMMRel then
+                                mousemoverel(mdx, mdy)
+                            else
+                                mousemoveabs(sp.X, sp.Y)
+                            end
+                        else
+                            local newLook = CFrame.lookAt(camPos, aimPos)
+                            local t = math.clamp(S.LegitSmooth, 0.05, 1)
+                            cam.CFrame = cam.CFrame:Lerp(newLook, t)
+                        end
                     end
                 end
             end
@@ -1394,6 +1421,23 @@ function require_Hypershot()
 
     local firingLock = false
 
+    -- Move the mouse toward a world position (works in first-person FPS).
+    -- The game's own camera controller consumes mouse deltas and rotates the view.
+    local hasMMRel = (mousemoverel ~= nil)
+    local hasMMAabs = (mousemoveabs ~= nil)
+    local function MoveMouseToward(cam, worldPos, smoothT)
+        local sp = cam:WorldToScreenPoint(worldPos)
+        if sp.Z < 0 then return end -- behind camera
+        local mp = UserInputService:GetMouseLocation()
+        local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+        local t = math.clamp(smoothT, 0.05, 1)
+        if hasMMRel then
+            mousemoverel(dx * t, dy * t)
+        elseif hasMMAabs then
+            mousemoveabs(sp.X, sp.Y)
+        end
+    end
+
     local function AimbotLoop()
         while H.Aimbot do
             task.wait()
@@ -1402,28 +1446,43 @@ function require_Hypershot()
             if not cam then break end
             local myC, myHrp = GetParts()
             if not (myC and myHrp) then break end
-            local holding = Util.IsHeld(H.AimKey)
-            local wantShoot = holding or H.Triggerbot
-            if wantShoot and H.Aimbot then
+            local wantShoot = Util.IsHeld(H.AimKey) or H.Triggerbot
+            if wantShoot then
                 local fov = (H.AimConfig == "Rage") and 360 or H.AimFOV
                 local camPos, camLook = cam.CFrame.Position, cam.CFrame.LookVector
                 local best = PickTarget(camPos, camLook, fov)
                 if best then
+                    local tp = GetTargetPoint(best.Part)
                     if H.AimConfig == "Rage" then
-                        cam.CFrame = CFrame.lookAt(camPos, best.Part.Position + Vector3.new(0, 1.4, 0))
+                        -- instant snap
+                        local sp = cam:WorldToScreenPoint(tp + Vector3.new(0, 1.4, 0))
+                        if sp.Z >= 0 then
+                            if hasMMRel then
+                                local mp = UserInputService:GetMouseLocation()
+                                mousemoverel(sp.X - mp.X, sp.Y - mp.Y)
+                            elseif hasMMAabs then
+                                mousemoveabs(sp.X, sp.Y)
+                            else
+                                cam.CFrame = CFrame.lookAt(camPos, tp + Vector3.new(0, 1.4, 0))
+                            end
+                        end
                     else
-                        local tp = GetTargetPoint(best.Part)
+                        -- legit smooth: aim a bit off-center with a human miss window
                         local aimPos = tp + Vector3.new(
                             (math.random() - 0.5) * H.LegitOffset,
                             (math.random() - 0.5) * H.LegitOffset, 0)
-                        local newLook = CFrame.lookAt(camPos, aimPos)
-                        local t = math.clamp(H.LegitSmooth, 0.05, 1)
-                        cam.CFrame = cam.CFrame:Lerp(newLook, t)
+                        if hasMMRel or hasMMAabs then
+                            MoveMouseToward(cam, aimPos, H.LegitSmooth)
+                        else
+                            local newLook = CFrame.lookAt(camPos, aimPos)
+                            local t = math.clamp(H.LegitSmooth, 0.05, 1)
+                            cam.CFrame = cam.CFrame:Lerp(newLook, t)
+                        end
                     end
                     if H.AutoFire and not firingLock then
                         firingLock = true
                         task.spawn(function()
-                            mouse1click()
+                            if mouse1click then mouse1click() end
                             task.wait(0.05)
                             firingLock = false
                         end)
