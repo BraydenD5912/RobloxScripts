@@ -84,6 +84,8 @@ local KNOWN_PLACE_IDS = {
     ["14259168147"]    = "basketball",     -- Basketball Legends (older/universe)
     ["71832465156084"] = "basketball",     -- Basketball Legends (current)
     ["109397169461300"]= "sniper",         -- Sniper Duels
+    ["17516596118"]    = "hypershot",      -- Hypershot (place)
+    ["5995470825"]     = "hypershot",      -- Hypershot (universe)
 }
 
 local function DetectGame()
@@ -107,6 +109,8 @@ local function DetectGame()
         GameName = "basketball"
     elseif pn:find("sniper") and pn:find("duel") then
         GameName = "sniper"
+    elseif pn:find("hypershot") then
+        GameName = "hypershot"
     elseif pn:find("keyboard") or pn:find("escape") or pn:find("speed") then
         GameName = "keyboardescape"
     end
@@ -127,6 +131,8 @@ task.spawn(function()
             GameName = "basketball"
         elseif n:find("sniper") and n:find("duel") then
             GameName = "sniper"
+        elseif n:find("hypershot") then
+            GameName = "hypershot"
         elseif n:find("keyboard") or n:find("escape") or n:find("speed") then
             GameName = "keyboardescape"
         end
@@ -144,6 +150,7 @@ local Window = Rayfield:CreateWindow({
     LoadingSubtitle = (GameName == "keyboardescape" and "+1 Speed Keyboard Escape")
         or (GameName == "basketball" and "Basketball Legends")
         or (GameName == "sniper" and "Sniper Duels")
+        or (GameName == "hypershot" and "Hypershot")
         or "Game: " .. tostring(game.Name),
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
@@ -1265,6 +1272,301 @@ function require_Sniper()
     Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Sniper Duels loaded (use on alt/private server!)", Duration = 5 })
 end
 
+-- ══════════════════════════════════════════════════════════════
+-- GAME MODULE: HYPERSHOT
+-- ══════════════════════════════════════════════════════════════
+function require_Hypershot()
+    local Players    = game:GetService("Players")
+    local LocalPlayer = Players.LocalPlayer
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local Camera = workspace.CurrentCamera
+
+    local H = {
+        Aimbot = false, AimFOV = 25, AimTeam = true, AimConfig = "Legit", AimHitbox = "Head",
+        LegitSmooth = 0.25, LegitOffset = 0.6,
+        Triggerbot = false, AutoFire = false,
+        ESP = false, TeamESP = false,
+        WalkSpeedEnabled = false, WalkSpeedValue = 32,
+        InfiniteJump = false, JumpPower = 60,
+        NoClip = false, FlyEnabled = false, FlySpeed = 40,
+        BHop = false,
+        DmgColor = Color3.fromRGB(255,50,50),
+        Connections = {},
+    }
+
+    local function DConn(name) if H.Connections[name] then pcall(function() H.Connections[name]:Disconnect() end); H.Connections[name] = nil end end
+    local function Util()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        return char, hrp, hum
+    end
+
+    -- get enemy characters (team-based)
+    local function GetEnemies()
+        local list = {}
+        local myTeam = LocalPlayer.Team
+        for _, pl in ipairs(Players:GetPlayers()) do
+            local isEnemy = pl ~= LocalPlayer
+            if H.AimTeam and myTeam and pl.Team and myTeam == pl.Team then isEnemy = false end
+            if isEnemy then
+                local hrp, hum
+                if pl.Character then
+                    hrp = pl.Character:FindFirstChild("HumanoidRootPart")
+                    hum = pl.Character:FindFirstChildOfClass("Humanoid")
+                end
+                if hrp and hum and hum.Health > 0 then
+                    table.insert(list, { Pl = pl, Part = hrp, Hum = hum })
+                end
+            end
+        end
+        return list
+    end
+
+    local function GetTargetPoint(part)
+        if H.AimHitbox == "Head" then
+            local head = part.Parent:FindFirstChild("Head")
+            if head then return head.Position end
+        end
+        return part.Position
+    end
+
+    local function PickTarget(camPos, camLook, fov)
+        local best, bestAng = nil, fov
+        local enemies = GetEnemies()
+        for _, t in ipairs(enemies) do
+            local pos = GetTargetPoint(t.Part)
+            local dir = (pos - camPos).unit
+            local ang = math.deg(math.acos(math.clamp(camLook:Dot(dir), -1, 1)))
+            if ang <= fov then
+                local dist = (pos - camPos).Magnitude
+                local score = ang + dist * 0.02
+                if not best or score < bestAng then
+                    bestAng = score
+                    best = t
+                end
+            end
+        end
+        return best
+    end
+
+    local firingLock = false
+    local function ShouldFire(target)
+        if H.Triggerbot then return true end
+        return UserInputService:IsKeyDown(Enum.KeyCode.LeftButton)
+    end
+
+    local function AimbotLoop()
+        while H.Aimbot do
+            task.wait()
+            if not H.Aimbot then break end
+            local cam = workspace.CurrentCamera
+            if not cam then break end
+            local myC, myHrp = Util()
+            if not (myC and myHrp) then break end
+            local holding = UserInputService:IsKeyDown(Enum.KeyCode.LeftButton)
+            local wantShoot = holding or H.Triggerbot
+            if wantShoot and H.Aimbot then
+                local fov = (H.AimConfig == "Rage") and 360 or H.AimFOV
+                local camPos, camLook = cam.CFrame.Position, cam.CFrame.LookVector
+                local best = PickTarget(camPos, camLook, fov)
+                if best then
+                    if H.AimConfig == "Rage" then
+                        cam.CFrame = CFrame.lookAt(camPos, best.Part.Position + Vector3.new(0, 1.4, 0))
+                    else
+                        local tp = GetTargetPoint(best.Part)
+                        local aimPos = tp + Vector3.new(
+                            (math.random() - 0.5) * H.LegitOffset,
+                            (math.random() - 0.5) * H.LegitOffset, 0)
+                        local newLook = CFrame.lookAt(camPos, aimPos)
+                        local t = math.clamp(H.LegitSmooth, 0.05, 1)
+                        cam.CFrame = cam.CFrame:Lerp(newLook, t)
+                    end
+                    if H.AutoFire and not firingLock then
+                        firingLock = true
+                        task.spawn(function()
+                            mouse1click()
+                            task.wait(0.05)
+                            firingLock = false
+                        end)
+                    end
+                end
+            end
+        end
+    end
+
+    -- ESP
+    local ESPItems = {}
+    local function ClearESP()
+        for _, it in ipairs(ESPItems) do pcall(function() it:Destroy() end) end
+        ESPItems = {}
+    end
+    local function MakeHighlight(pl, color)
+        local c = pl.Character
+        if not c then return end
+        local hl = Instance.new("Highlight")
+        hl.Name = "_OU_ESP"
+        hl.FillColor = color
+        hl.OutlineColor = Color3.fromRGB(255,255,255)
+        hl.FillTransparency = 0.5
+        hl.Parent = c
+        ESPItems[#ESPItems+1] = hl
+    end
+    local function ESPLoop()
+        local seen = {}
+        while H.ESP do
+            for _, pl in ipairs(Players:GetPlayers()) do
+                if pl ~= LocalPlayer and pl.Character and not seen[pl] then
+                    local isEnemy = true
+                    if H.TeamESP and LocalPlayer.Team and pl.Team and LocalPlayer.Team == pl.Team then isEnemy = false end
+                    MakeHighlight(pl, isEnemy and H.DmgColor or Color3.fromRGB(80,170,255))
+                    seen[pl] = true
+                end
+            end
+            task.wait(1.5)
+        end
+    end
+
+    -- noclip
+    H.Connections["NoClip"] = RunService.Stepped:Connect(function()
+        if H.NoClip then
+            local c, hrp = Util()
+            for _, part in ipairs(c and c:GetDescendants() or {}) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+        end
+    end)
+
+    -- fly
+    H.Connections["Fly"] = RunService.RenderStepped:Connect(function()
+        local c, hrp, hum = Util()
+        if not (c and hrp and hum) then return end
+        if H.FlyEnabled then
+            hum.PlatformStand = true
+            local speed = H.FlySpeed
+            hrp.Velocity = Vector3.new(0,0,0)
+            local move = Vector3.new(0,0,0)
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + Camera.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - Camera.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - Camera.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + Camera.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0,1,0) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move = move - Vector3.new(0,1,0) end
+            if move.Magnitude > 0 then move = move.unit * speed end
+            hrp.Velocity = move
+        else
+            hum.PlatformStand = false
+        end
+    end)
+
+    -- infinite jump
+    H.Connections["InfJump"] = UserInputService.JumpRequest:Connect(function()
+        if H.InfiniteJump then
+            local _, hrp, hum = Util()
+            if hrp and hum and hum:GetState() ~= Enum.HumanoidStateType.Falling then
+                hrp:ApplyImpulse(Vector3.new(0, H.JumpPower * 45, 0))
+            end
+        end
+    end)
+
+    -- bhop (auto-jump on landing while holding space)
+    H.Connections["BHop"] = RunService.Heartbeat:Connect(function()
+        local _, hrp, hum = Util()
+        if H.BHop and hrp and hum and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+            if hum:GetState() == Enum.HumanoidStateType.Landed or hum:GetState() == Enum.HumanoidStateType.Running then
+                hum.Jump = true
+            end
+        end
+    end)
+
+    -- movement core loop (walkspeed)
+    RunService.RenderStepped:Connect(function()
+        if H.WalkSpeedEnabled then
+            local _, _, hum = Util()
+            if hum then hum.WalkSpeed = H.WalkSpeedValue end
+        end
+    end)
+
+    -- TABS
+    local AimTab = Window:CreateTab("Aimbot", 4483362458)
+    local espTab = Window:CreateTab("Visuals", 4483362458)
+    local MoveTab = Window:CreateTab("Move", 4483362458)
+    local miscTab = Window:CreateTab("Misc", 4483362458)
+
+    -- WARNING BANNER
+    AimTab:CreateSection("WARNING")
+    AimTab:CreateLabel("Hypershot bans ALL accounts for cheating — run on ALT / PRIVATE SERVER only!")
+    AimTab:CreateLabel("Enable features at your own risk.")
+
+    -- AIMBOT
+    AimTab:CreateSection("Aimbot")
+    AimTab:CreateToggle({ Name = "Aimbot (while holding Left Click)", CurrentValue = false, Flag = "HSAimFlag",
+        Callback = function(v)
+            H.Aimbot = v
+            if v then task.spawn(AimbotLoop) end
+        end })
+    AimTab:CreateToggle({ Name = "Triggerbot (aim + shoot while just aiming)", CurrentValue = false, Flag = "HSTrigFlag",
+        Callback = function(v) H.Triggerbot = v end })
+    AimTab:CreateToggle({ Name = "Auto Fire", CurrentValue = false, Flag = "HSAutoFireFlag",
+        Callback = function(v) H.AutoFire = v end })
+    AimTab:CreateSection("Config")
+    AimTab:CreateDropdown({ Name = "Aimbot Config", Options = {"Legit","Rage"}, CurrentOption = {"Legit"}, Flag = "HSAimConfigFlag",
+        Callback = function(o) H.AimConfig = o[1] end })
+    AimTab:CreateDropdown({ Name = "Hitbox", Options = {"Head","Body"}, CurrentOption = {"Head"}, Flag = "HSAimHitboxFlag",
+        Callback = function(o) H.AimHitbox = o[1] end })
+    AimTab:CreateSlider({ Name = "Aimbot FOV (Legit)", Range = {5,120}, Increment = 1, Suffix = " deg", CurrentValue = 25, Flag = "HSAimFOVFlag",
+        Callback = function(v) H.AimFOV = v end })
+    AimTab:CreateSlider({ Name = "Aim Smoothness", Range = {0.05,1}, Increment = 0.01, Suffix = "", CurrentValue = 0.25, Flag = "HSLegitSmoothFlag",
+        Callback = function(v) H.LegitSmooth = v end })
+    AimTab:CreateSlider({ Name = "Human Miss Offset (studs)", Range = {0,3}, Increment = 0.1, Suffix = "", CurrentValue = 0.6, Flag = "HSLegitOffsetFlag",
+        Callback = function(v) H.LegitOffset = v end })
+    AimTab:CreateToggle({ Name = "Enemies Only (Team based)", CurrentValue = true, Flag = "HSAimTeamFlag",
+        Callback = function(v) H.AimTeam = v end })
+
+    -- VISUALS
+    espTab:CreateSection("Visuals")
+    espTab:CreateToggle({ Name = "Player ESP (Highlight)", CurrentValue = false, Flag = "HSESPFlag",
+        Callback = function(v)
+            H.ESP = v
+            if v then ClearESP(); task.spawn(ESPLoop) else ClearESP() end
+        end })
+    espTab:CreateToggle({ Name = "Show Teammates (blue)", CurrentValue = false, Flag = "HSTeamESPFlag",
+        Callback = function(v) H.TeamESP = v end })
+    espTab:CreateButton({ Name = "Clear ESP", Callback = function() ClearESP() end })
+
+    -- MOVE
+    MoveTab:CreateSection("Movement")
+    MoveTab:CreateToggle({ Name = "Bunny Hop (hold Space)", CurrentValue = false, Flag = "HSBHopFlag",
+        Callback = function(v) H.BHop = v end })
+    MoveTab:CreateToggle({ Name = "WalkSpeed", CurrentValue = false, Flag = "HSWalkFlag",
+        Callback = function(v) H.WalkSpeedEnabled = v end })
+    MoveTab:CreateSlider({ Name = "WalkSpeed", Range = {16,200}, Increment = 1, CurrentValue = 32, Flag = "HSWalkValFlag",
+        Callback = function(v) H.WalkSpeedValue = v end })
+    MoveTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "HSInfJumpFlag",
+        Callback = function(v) H.InfiniteJump = v end })
+    MoveTab:CreateSlider({ Name = "Jump Power", Range = {50,300}, Increment = 5, CurrentValue = 60, Flag = "HSJumpFlag",
+        Callback = function(v) H.JumpPower = v end })
+    MoveTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "HSNoClipFlag",
+        Callback = function(v) H.NoClip = v end })
+    MoveTab:CreateToggle({ Name = "Fly (hold W/Space, Shift to descend)", CurrentValue = false, Flag = "HSFlyFlag",
+        Callback = function(v) H.FlyEnabled = v end })
+    MoveTab:CreateSlider({ Name = "Fly Speed", Range = {10,200}, Increment = 5, CurrentValue = 40, Flag = "HSFlySpeedFlag",
+        Callback = function(v) H.FlySpeed = v end })
+
+    -- MISC
+    miscTab:CreateSection("Cleanup")
+    miscTab:CreateButton({ Name = "Destroy UI",
+        Callback = function()
+            ClearESP()
+            for name, _ in pairs(H.Connections) do DConn(name) end
+            H.Aimbot=false; H.ESP=false; H.WalkSpeedEnabled=false; H.InfiniteJump=false; H.NoClip=false; H.FlyEnabled=false; H.Triggerbot=false; H.AutoFire=false; H.BHop=false
+            Window:Destroy()
+        end })
+
+    Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Hypershot loaded (use on ALT / PRIVATE server!)", Duration = 5 })
+end
+
 -- LAUNCH
 -- ══════════════════════════════════════════════════════════════
 local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/KeyboardEscapeHub.lua'
@@ -1287,6 +1589,7 @@ local function ShowHomeTab()
     HomeTab:CreateButton({ Name = "Reload as Keyboard Escape", Callback = function() Reload("keyboardescape") end })
     HomeTab:CreateButton({ Name = "Reload as Basketball Legends", Callback = function() Reload("basketball") end })
     HomeTab:CreateButton({ Name = "Reload as Sniper Duels", Callback = function() Reload("sniper") end })
+    HomeTab:CreateButton({ Name = "Reload as Hypershot", Callback = function() Reload("hypershot") end })
 end
 
 local Launched = false
@@ -1299,6 +1602,8 @@ function LaunchGame()
         require_Basketball()
     elseif GameName == "sniper" then
         require_Sniper()
+    elseif GameName == "hypershot" then
+        require_Hypershot()
     else
         Launched = false
         ShowHomeTab()
@@ -1312,7 +1617,7 @@ if not Launched then
     task.spawn(function()
         task.wait(3)
         if Launched then return end
-        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" then
+        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" or GameName == "hypershot" then
             Reload(GameName)
         end
     end)
