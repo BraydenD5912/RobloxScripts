@@ -83,6 +83,7 @@ local KNOWN_PLACE_IDS = {
     ["9584852943"]     = "keyboardescape", -- +1 Speed Keyboard Escape (version)
     ["14259168147"]    = "basketball",     -- Basketball Legends (older/universe)
     ["71832465156084"] = "basketball",     -- Basketball Legends (current)
+    ["109397169461300"]= "sniper",         -- Sniper Duels
 }
 
 local function DetectGame()
@@ -104,6 +105,8 @@ local function DetectGame()
     -- 3) Name-based detection
     if pn:find("basketball") then
         GameName = "basketball"
+    elseif pn:find("sniper") and pn:find("duel") then
+        GameName = "sniper"
     elseif pn:find("keyboard") or pn:find("escape") or pn:find("speed") then
         GameName = "keyboardescape"
     end
@@ -122,6 +125,8 @@ task.spawn(function()
         local n = info.Name:lower()
         if n:find("basketball") then
             GameName = "basketball"
+        elseif n:find("sniper") and n:find("duel") then
+            GameName = "sniper"
         elseif n:find("keyboard") or n:find("escape") or n:find("speed") then
             GameName = "keyboardescape"
         end
@@ -138,6 +143,7 @@ local Window = Rayfield:CreateWindow({
     LoadingTitle = "Multi-Game Hub",
     LoadingSubtitle = (GameName == "keyboardescape" and "+1 Speed Keyboard Escape")
         or (GameName == "basketball" and "Basketball Legends")
+        or (GameName == "sniper" and "Sniper Duels")
         or "Game: " .. tostring(game.Name),
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
@@ -946,6 +952,270 @@ function require_Basketball()
     Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Basketball Legends loaded", Duration = 3 })
 end
 
+-- ══════════════════════════════════════════════════════════════
+-- GAME MODULE: SNIPER DUELS
+-- ══════════════════════════════════════════════════════════════
+function require_Sniper()
+    local S = {
+        Aimbot = false, AimMode = "Head", AimFOV = 20, AimTeam = true,
+        Triggerbot = false,
+        ESP = false, ESPTeamOnly = true,
+        WalkSpeedEnabled = false, WalkSpeedValue = 40,
+        InfiniteJump = false, NoClip = false, FlyEnabled = false, FlySpeed = 50,
+        AutoQueue = false, AutoReady = false,
+        AutoShoot = false,
+        AntiAFK = false,
+        Connections = {},
+    }
+
+    local function DConn(name)
+        if S.Connections[name] then S.Connections[name]:Disconnect(); S.Connections[name] = nil end
+    end
+
+    -- Team handling
+    local function IsEnemy(pl)
+        if pl == LocalPlayer then return false end
+        if not pl.Character then return false end
+        local Teams = game:GetService("Teams")
+        local t1 = pl.Team
+        local t0 = LocalPlayer.Team
+        if t1 and t0 then
+            return t1 ~= t0
+        end
+        -- No team info (or ffa) -> treat everyone as enemy
+        return true
+    end
+
+    local function GetCameraTargetList()
+        local out = {}
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= LocalPlayer and pl.Character then
+                local hrp = pl.Character:FindFirstChild("HumanoidRootPart")
+                local hum = pl.Character:FindFirstChildOfClass("Humanoid")
+                if hrp and hum and hum.Health > 0 then
+                    if not (S.AimTeam and not IsEnemy(pl)) then
+                        table.insert(out, { pl = pl, hrp = hrp, char = pl.Character })
+                    end
+                end
+            end
+        end
+        return out
+    end
+
+    -- Aimbot: rotate camera toward nearest enemy (within FOV) when aiming key held
+    local function AimbotLoop()
+        while S.Aimbot do
+            task.wait()
+            if not S.Aimbot then break end
+            local cam = Camera
+            if cam then
+                local camPos = cam.CFrame.Position
+            local targets = GetCameraTargetList()
+            local best, bd = nil, S.AimFOV
+            for _, t in ipairs(targets) do
+                local pos
+                if S.AimMode == "Head" then
+                    local h = t.char:FindFirstChild("Head")
+                    pos = h and h.Position or t.hrp.Position + Vector3.new(0, 2, 0)
+                else
+                    pos = t.hrp.Position
+                end
+                local dir = (pos - camPos)
+                local look = cam.CFrame.LookVector
+                local ang = math.deg(math.acos(math.clamp(dir.Unit:Dot(look), -1, 1)))
+                if ang <= bd then
+                    bd = ang
+                    best = { pos = pos, t = t }
+                end
+            end
+            if best and (UserInputService:IsKeyDown(Enum.KeyCode.LeftButton) or S.Triggerbot) then
+                cam.CFrame = CFrame.lookAt(camPos, best.pos)
+            end
+            end
+        end
+    end
+
+    -- ESP highlights
+    local ESPObjects = {}
+    local function ClearESP()
+        for _, v in ipairs(ESPObjects) do if v and v.Parent then v:Destroy() end end
+        ESPObjects = {}
+    end
+    local function MkESP(parent, color, label)
+        if not parent or not parent.Parent then return end
+        local hl = Instance.new("Highlight"); hl.Name = "SD_HL"; hl.FillColor = color; hl.OutlineColor = color; hl.FillTransparency = 0.5; hl.OutlineTransparency = 0; hl.Adornee = parent; hl.Parent = parent
+        table.insert(ESPObjects, hl)
+        if label then
+            local bb = Instance.new("BillboardGui"); bb.Name = "SD_BB"; bb.Size = UDim2.new(0,120,0,30); bb.StudsOffset = Vector3.new(0,3,0); bb.AlwaysOnTop = true; bb.Adornee = parent; bb.Parent = parent
+            local l = Instance.new("TextLabel"); l.Size = UDim2.new(1,0,1,0); l.BackgroundTransparency = 1; l.Text = label; l.TextColor3 = color; l.TextStrokeTransparency = 0.3; l.TextScaled = true; l.Font = Enum.Font.GothamBold; l.Parent = bb
+            table.insert(ESPObjects, bb)
+        end
+    end
+
+    local function ESPLoop()
+        while S.ESP do
+            for _, pl in ipairs(Players:GetPlayers()) do
+                if pl.Character and pl ~= LocalPlayer then
+                    local color = Color3.fromRGB(255, 60, 60)
+                    MkESP(pl.Character, color, pl.Name)
+                end
+            end
+            task.wait(2)
+        end
+    end
+
+    -- TABS
+    local AimTab = Window:CreateTab("Aimbot", 4483362458)
+    local espTab = Window:CreateTab("ESP", 4483362458)
+    local MoveTab = Window:CreateTab("Move", 4483362458)
+    local autoTab = Window:CreateTab("Auto Play", 4483362458)
+    local miscTab = Window:CreateTab("Misc", 4483362458)
+
+    -- AIMBOT
+    AimTab:CreateSection("Aimbot")
+    AimTab:CreateToggle({ Name = "Aimbot (hold Left Click)", CurrentValue = false, Flag = "SDAimFlag",
+        Callback = function(v)
+            S.Aimbot = v
+            if v then task.spawn(AimbotLoop) end
+        end })
+    AimTab:CreateToggle({ Name = "Triggerbot (aim while just aiming)", CurrentValue = false, Flag = "SDTriggerFlag",
+        Callback = function(v) S.Triggerbot = v end })
+    AimTab:CreateDropdown({ Name = "Aim Target", Options = {"Head","Body"}, CurrentOption = {"Head"}, Flag = "SDAimModeFlag",
+        Callback = function(o) S.AimMode = o[1] end })
+    AimTab:CreateSlider({ Name = "Aimbot FOV", Range = {5,90}, Increment = 1, Suffix = " deg", CurrentValue = 20, Flag = "SDAimFOVFlag",
+        Callback = function(v) S.AimFOV = v end })
+    AimTab:CreateToggle({ Name = "Target Enemies Only (Team based)", CurrentValue = true, Flag = "SDAimTeamFlag",
+        Callback = function(v) S.AimTeam = v end })
+
+    -- ESP
+    espTab:CreateSection("Visuals")
+    espTab:CreateToggle({ Name = "Player ESP", CurrentValue = false, Flag = "SDESPFlag",
+        Callback = function(v)
+            S.ESP = v
+            if v then ClearESP(); task.spawn(ESPLoop) else ClearESP() end
+        end })
+    espTab:CreateButton({ Name = "Clear ESP", Callback = ClearESP })
+
+    -- MOVE
+    MoveTab:CreateSection("Movement")
+    MoveTab:CreateToggle({ Name = "Custom WalkSpeed", CurrentValue = false, Flag = "SDWalkFlag",
+        Callback = function(v) S.WalkSpeedEnabled = v; if not v then local h = Util.GetHumanoid(); if h then h.WalkSpeed = 16 end end end })
+    MoveTab:CreateSlider({ Name = "WalkSpeed Value", Range = {16,150}, Increment = 1, Suffix = "", CurrentValue = 40, Flag = "SDWalkValFlag",
+        Callback = function(v) S.WalkSpeedValue = v end })
+    MoveTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "SDInfJumpFlag",
+        Callback = function(v)
+            S.InfiniteJump = v
+            if v then S.Connections.InfJump = UserInputService.JumpRequest:Connect(function() if S.InfiniteJump and Util.IsAlive() then local h = Util.GetHumanoid(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end end)
+            else DConn("InfJump") end
+        end })
+    MoveTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "SDNoClipFlag",
+        Callback = function(v)
+            S.NoClip = v
+            if v then S.Connections.NoClip = RunService.Stepped:Connect(function() if S.NoClip then local c = Util.GetCharacter(); if c then for _, p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end end end)
+            else DConn("NoClip") end
+        end })
+    MoveTab:CreateToggle({ Name = "Fly (W/Space/Ctrl)", CurrentValue = false, Flag = "SDFlyFlag",
+        Callback = function(v)
+            S.FlyEnabled = v
+            if v then
+                local bv, bg
+                S.Connections.Fly = RunService.RenderStepped:Connect(function()
+                    local root = Util.GetRoot()
+                    if not root or not Util.IsAlive() then S.FlyEnabled = false; if bv then bv:Destroy() end; if bg then bg:Destroy() end; DConn("Fly"); return end
+                    if not bv then
+                        bv = Instance.new("BodyVelocity"); bv.MaxForce = Vector3.new(math.huge,math.huge,math.huge); bv.Velocity = Vector3.zero; bv.Parent = root
+                        bg = Instance.new("BodyGyro"); bg.MaxTorque = Vector3.new(math.huge,math.huge,math.huge); bg.P = 9000; bg.D = 500; bg.Parent = root
+                    end
+                    local md = Vector3.zero; local cam = Camera.CFrame
+                    if UserInputService:IsKeyDown(Enum.KeyCode.W) then md = md + cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.S) then md = md - cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.A) then md = md - cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.D) then md = md + cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then md = md + Vector3.new(0,1,0) end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then md = md - Vector3.new(0,1,0) end
+                    if md.Magnitude > 0 then md = md.Unit * S.FlySpeed end
+                    bv.Velocity = md; bg.CFrame = cam
+                end)
+            else
+                DConn("Fly")
+                local root = Util.GetRoot()
+                if root then for _, v in ipairs(root:GetChildren()) do if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then v:Destroy() end end end
+            end
+        end })
+    MoveTab:CreateSlider({ Name = "Fly Speed", Range = {10,200}, Increment = 5, Suffix = " studs/s", CurrentValue = 50, Flag = "SDFlySpeedFlag",
+        Callback = function(v) S.FlySpeed = v end })
+
+    -- AUTO PLAY
+    autoTab:CreateSection("Auto Play")
+    autoTab:CreateToggle({ Name = "Auto Queue / Join Duel", CurrentValue = false, Flag = "SDAutoQueueFlag",
+        Callback = function(v)
+            S.AutoQueue = v
+            if v then task.spawn(function()
+                while S.AutoQueue do
+                    pcall(function()
+                        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+                        if pg then
+                            for _, btn in ipairs(pg:GetDescendants()) do
+                                local n = btn.Name:lower()
+                                local txt = (btn:IsA("TextButton") and btn.Text and btn.Text:lower()) or ""
+                                if btn:IsA("TextButton") and (n:find("play") or n:find("queue") or n:find("join") or n:find("duel") or txt:find("play") or txt:find("queue") or txt:find("join")) then
+                                    btn:Activate()
+                                end
+                            end
+                        end
+                    end)
+                    task.wait(3)
+                end
+            end) end
+        end })
+    autoTab:CreateToggle({ Name = "Auto Ready", CurrentValue = false, Flag = "SDAutoReadyFlag",
+        Callback = function(v)
+            S.AutoReady = v
+            if v then task.spawn(function()
+                while S.AutoReady do
+                    pcall(function()
+                        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+                        if pg then
+                            for _, btn in ipairs(pg:GetDescendants()) do
+                                if btn:IsA("TextButton") and btn.Text and btn.Text:lower() == "ready" then
+                                    btn:Activate()
+                                end
+                            end
+                        end
+                    end)
+                    task.wait(1)
+                end
+            end) end
+        end })
+
+    -- MISC
+    miscTab:CreateSection("Warning")
+    miscTab:CreateLabel("This game PERMABANS cheaters, no appeals.")
+    miscTab:CreateLabel("Use on a private server / alt account.")
+    miscTab:CreateSection("Anti AFK")
+    miscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "SDAntiAFKFlag",
+        Callback = function(v)
+            S.AntiAFK = v
+            if v then S.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
+            else DConn("AntiAFK") end
+        end })
+    miscTab:CreateSection("Cleanup")
+    miscTab:CreateButton({ Name = "Destroy UI",
+        Callback = function()
+            ClearESP()
+            for name, _ in pairs(S.Connections) do DConn(name) end
+            S.Aimbot=false; S.ESP=false; S.WalkSpeedEnabled=false; S.InfiniteJump=false; S.NoClip=false; S.FlyEnabled=false; S.AutoQueue=false; S.AutoReady=false; S.Triggerbot=false
+            Window:Destroy()
+        end })
+
+    -- Core loop (walkspeed)
+    RunService.RenderStepped:Connect(function()
+        if S.WalkSpeedEnabled then local h = Util.GetHumanoid(); if h then h.WalkSpeed = S.WalkSpeedValue end end
+    end)
+
+    Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Sniper Duels loaded (use on alt/private server!)", Duration = 5 })
+end
+
 -- LAUNCH
 -- ══════════════════════════════════════════════════════════════
 local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/KeyboardEscapeHub.lua'
@@ -967,6 +1237,7 @@ local function ShowHomeTab()
     HomeTab:CreateLabel("PlaceId: " .. tostring(game.PlaceId))
     HomeTab:CreateButton({ Name = "Reload as Keyboard Escape", Callback = function() Reload("keyboardescape") end })
     HomeTab:CreateButton({ Name = "Reload as Basketball Legends", Callback = function() Reload("basketball") end })
+    HomeTab:CreateButton({ Name = "Reload as Sniper Duels", Callback = function() Reload("sniper") end })
 end
 
 local Launched = false
@@ -977,6 +1248,8 @@ function LaunchGame()
         require_KeyboardEscape()
     elseif GameName == "basketball" then
         require_Basketball()
+    elseif GameName == "sniper" then
+        require_Sniper()
     else
         Launched = false
         ShowHomeTab()
@@ -990,7 +1263,7 @@ if not Launched then
     task.spawn(function()
         task.wait(3)
         if Launched then return end
-        if GameName == "keyboardescape" or GameName == "basketball" then
+        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" then
             Reload(GameName)
         end
     end)
