@@ -83,8 +83,6 @@ local KNOWN_PLACE_IDS = {
     ["9584852943"]     = "keyboardescape", -- +1 Speed Keyboard Escape (version)
     ["14259168147"]    = "basketball",     -- Basketball Legends (older/universe)
     ["71832465156084"] = "basketball",     -- Basketball Legends (current)
-    ["107778070777162"]= "stealegg",       -- Steal An Egg (place)
-    ["10563114921"]    = "stealegg",       -- Steal An Egg (universe)
 }
 
 local function DetectGame()
@@ -106,8 +104,6 @@ local function DetectGame()
     -- 3) Name-based detection
     if pn:find("basketball") then
         GameName = "basketball"
-    elseif pn:find("egg") and (pn:find("steal") or pn:find("steeling")) then
-        GameName = "stealegg"
     elseif pn:find("keyboard") or pn:find("escape") or pn:find("speed") then
         GameName = "keyboardescape"
     end
@@ -126,8 +122,6 @@ task.spawn(function()
         local n = info.Name:lower()
         if n:find("basketball") then
             GameName = "basketball"
-        elseif n:find("egg") and (n:find("steal") or n:find("steeling")) then
-            GameName = "stealegg"
         elseif n:find("keyboard") or n:find("escape") or n:find("speed") then
             GameName = "keyboardescape"
         end
@@ -144,7 +138,6 @@ local Window = Rayfield:CreateWindow({
     LoadingTitle = "Multi-Game Hub",
     LoadingSubtitle = (GameName == "keyboardescape" and "+1 Speed Keyboard Escape")
         or (GameName == "basketball" and "Basketball Legends")
-        or (GameName == "stealegg" and "Steal An Egg")
         or "Game: " .. tostring(game.Name),
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
@@ -953,318 +946,6 @@ function require_Basketball()
     Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Basketball Legends loaded", Duration = 3 })
 end
 
--- ══════════════════════════════════════════════════════════════
--- GAME MODULE: STEAL AN EGG
--- ══════════════════════════════════════════════════════════════
-function require_StealEgg()
-    local S = {
-        AutoSteal = false, StealDelay = 1,
-        AutoReturn = false,
-        AutoTreadmill = false, TreadmillDelay = 3,
-        AutoHatch = false, HatchDelay = 0.3,
-        SpeedBoost = false, SpeedVal = 20,
-        InfiniteJump = false,
-        FlyEnabled = false, FlySpeed = 50,
-        NoClip = false,
-        ClickTP = false,
-        Connections = {},
-    }
-
-    local function DConn(name)
-        if S.Connections[name] then S.Connections[name]:Disconnect(); S.Connections[name] = nil end
-    end
-
-    -- Object finders
-    local function FindAllByname(pattern)
-        local out = {}
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and obj.Name:find(pattern) then
-                table.insert(out, obj)
-            end
-        end
-        return out
-    end
-
-    local function NearestByName(pattern)
-        local root = Util.GetRoot()
-        if not root then return nil end
-        local best, bd = nil, math.huge
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and obj.Name:find(pattern) then
-                local d = (root.Position - obj.Position).Magnitude
-                if d < bd then bd = d; best = obj end
-            end
-        end
-        return best
-    end
-
-    -- Base/safe zone finder (where you deliver eggs)
-    local function FindBase()
-        return NearestByName("Base") or NearestByName("Spawn") or NearestByName("Safe") or NearestByName("Home")
-    end
-
-    -- Interaction: try pickup remote, else emulate E press
-    local function TryPickup(target)
-        if not target then return false end
-        local fired = false
-        local function scan(parent, depth)
-            if depth > 6 then return end
-            for _, obj in ipairs(parent:GetChildren()) do
-                local n = obj.Name:lower()
-                if obj:IsA("RemoteEvent") and (n:find("egg") or n:find("steal") or n:find("pick") or n:find("collect") or n:find("grab") or n:find("interact")) then
-                    pcall(function() obj:FireServer() end)
-                    fired = true
-                end
-                scan(obj, depth + 1)
-            end
-        end
-        pcall(scan, ReplicatedStorage, 0)
-        if fired then return true end
-        pcall(function() VirtualUser:Button1Down(Vector2.new(0,0)) end)
-        task.wait(0.05)
-        pcall(function() VirtualUser:Button1Up(Vector2.new(0,0)) end)
-        return true
-    end
-
-    -- TABS
-    local AutoTab = Window:CreateTab("Auto Farm", 4483362458)
-    local ESPTab = Window:CreateTab("ESP", 4483362458)
-    local MoveTab = Window:CreateTab("Move", 4483362458)
-    local TeleTab = Window:CreateTab("Teleport", 4483362458)
-    local MiscTab = Window:CreateTab("Misc", 4483362458)
-
-    -- AUTO FARM
-    AutoTab:CreateSection("Steal Loop")
-    AutoTab:CreateToggle({ Name = "Auto Steal Egg (TP & Grab nearest)", CurrentValue = false, Flag = "SEAutoStealFlag",
-        Callback = function(v)
-            S.AutoSteal = v
-            if v then task.spawn(function()
-                while S.AutoSteal do
-                    local root = Util.GetRoot()
-                    if root then
-                        local egg = NearestByName("Egg")
-                        if egg then
-                            root.CFrame = egg.CFrame + Vector3.new(0, 3, 0)
-                            task.wait(0.2)
-                            TryPickup(egg)
-                        end
-                    end
-                    task.wait(S.StealDelay)
-                end
-            end) end
-        end })
-    AutoTab:CreateSlider({ Name = "Steal Interval", Range = {0.3,5}, Increment = 0.1, Suffix = "s", CurrentValue = 1, Flag = "SEAutoStealDelayFlag",
-        Callback = function(v) S.StealDelay = v end })
-
-    AutoTab:CreateToggle({ Name = "Auto Return to Base (after steal)", CurrentValue = false, Flag = "SEAutoReturnFlag",
-        Callback = function(v)
-            S.AutoReturn = v
-            if v then task.spawn(function()
-                while S.AutoReturn do
-                    local root = Util.GetRoot()
-                    if root then
-                        local base = FindBase()
-                        if base then root.CFrame = base.CFrame + Vector3.new(0, 3, 0) end
-                    end
-                    task.wait(2)
-                end
-            end) end
-        end })
-
-    AutoTab:CreateSection("Passive Farm")
-    AutoTab:CreateToggle({ Name = "Auto Treadmill (AFK speed)", CurrentValue = false, Flag = "SEAutoTreadFlag",
-        Callback = function(v)
-            S.AutoTreadmill = v
-            if v then task.spawn(function()
-                while S.AutoTreadmill do
-                    local root = Util.GetRoot()
-                    if root and Util.IsAlive() then
-                        local tread = NearestByName("Treadmill") or NearestByName("Tread") or NearestByName("Train")
-                        if tread then root.CFrame = tread.CFrame + Vector3.new(0, 3, 0) end
-                    end
-                    task.wait(S.TreadmillDelay)
-                end
-            end) end
-        end })
-    AutoTab:CreateSlider({ Name = "Treadmill Interval", Range = {0.5,10}, Increment = 0.5, Suffix = "s", CurrentValue = 3, Flag = "SEAutoTreadDelayFlag",
-        Callback = function(v) S.TreadmillDelay = v end })
-
-    AutoTab:CreateToggle({ Name = "Auto Hatch", CurrentValue = false, Flag = "SEAutoHatchFlag",
-        Callback = function(v)
-            S.AutoHatch = v
-            if v then task.spawn(function()
-                while S.AutoHatch do
-                    pcall(function()
-                        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-                        if pg then
-                            for _, btn in ipairs(pg:GetDescendants()) do
-                                local n = btn.Name:lower()
-                                if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and (n:find("hatch") or n:find("open") or n:find("collect") or n:find("claim")) then
-                                    btn:Activate()
-                                elseif btn:IsA("TextButton") and btn.Text and btn.Text:lower():find("hatch") then
-                                    btn:Activate()
-                                end
-                            end
-                        end
-                    end)
-                    task.wait(S.HatchDelay)
-                end
-            end) end
-        end })
-    AutoTab:CreateSlider({ Name = "Hatch Interval", Range = {0.1,2}, Increment = 0.05, Suffix = "s", CurrentValue = 0.3, Flag = "SEAutoHatchDelayFlag",
-        Callback = function(v) S.HatchDelay = v end })
-
-    -- ESP
-    local ESPObjects = {}
-    local function ClearESP()
-        for _, v in ipairs(ESPObjects) do if v and v.Parent then v:Destroy() end end
-        ESPObjects = {}
-    end
-    local function MkHL(parent, color, label)
-        if not parent or not parent.Parent then return end
-        local hl = Instance.new("Highlight"); hl.Name = "SE_HL"; hl.FillColor = color; hl.OutlineColor = color; hl.FillTransparency = 0.6; hl.OutlineTransparency = 0; hl.Adornee = parent; hl.Parent = parent
-        table.insert(ESPObjects, hl)
-        if label then
-            local bb = Instance.new("BillboardGui"); bb.Name = "SE_BB"; bb.Size = UDim2.new(0,100,0,30); bb.StudsOffset = Vector3.new(0,3,0); bb.AlwaysOnTop = true; bb.Adornee = parent; bb.Parent = parent
-            local l = Instance.new("TextLabel"); l.Size = UDim2.new(1,0,1,0); l.BackgroundTransparency = 1; l.Text = label; l.TextColor3 = color; l.TextStrokeTransparency = 0.3; l.TextScaled = true; l.Font = Enum.Font.GothamBold; l.Parent = bb
-            table.insert(ESPObjects, bb)
-        end
-    end
-
-    ESPTab:CreateSection("ESP")
-    ESPTab:CreateToggle({ Name = "Egg ESP", CurrentValue = false, Flag = "SEEggESPFlag",
-        Callback = function(v)
-            S.EggESP = v
-            if v then task.spawn(function()
-                while S.EggESP do
-                    ClearESP()
-                    for _, egg in ipairs(FindAllByname("Egg")) do MkHL(egg, Color3.fromRGB(255,215,0), "EGG") end
-                    task.wait(2)
-                end
-            end) else ClearESP() end
-        end })
-    ESPTab:CreateToggle({ Name = "Guardian/Boss ESP", CurrentValue = false, Flag = "SEBossESPFlag",
-        Callback = function(v)
-            S.BossESP = v
-            if v then task.spawn(function()
-                while S.BossESP do
-                    for _, boss in ipairs(FindAllByname("boss")) do MkHL(boss, Color3.fromRGB(255,50,50), "BOSS") end
-                    task.wait(2)
-                end
-            end) end
-        end })
-    ESPTab:CreateToggle({ Name = "Player ESP", CurrentValue = false, Flag = "SEPlayerESPFlag",
-        Callback = function(v)
-            S.PlayerESP = v
-            if v then task.spawn(function()
-                while S.PlayerESP do
-                    for _, pl in ipairs(Players:GetPlayers()) do
-                        if pl ~= LocalPlayer and pl.Character then
-                            MkHL(pl.Character, Color3.fromRGB(0,200,255), pl.Name)
-                        end
-                    end
-                    task.wait(2)
-                end
-            end) else ClearESP() end
-        end })
-    ESPTab:CreateButton({ Name = "Clear ESP", Callback = ClearESP })
-
-    -- MOVE
-    MoveTab:CreateSection("Speed")
-    MoveTab:CreateToggle({ Name = "Speed Boost", CurrentValue = false, Flag = "SESpeedFlag",
-        Callback = function(v)
-            S.SpeedBoost = v
-            if v then S.Connections.Speed = RunService.RenderStepped:Connect(function()
-                if not S.SpeedBoost then return end
-                local root, hum = Util.GetRoot(), Util.GetHumanoid()
-                if root and hum and hum.MoveDirection.Magnitude > 0 then
-                    root.CFrame = root.CFrame + (hum.MoveDirection.Unit * (S.SpeedVal - 16) * 0.05)
-                end
-            end) else DConn("Speed") end
-        end })
-    MoveTab:CreateSlider({ Name = "Speed Amount", Range = {16,60}, Increment = 1, Suffix = "", CurrentValue = 20, Flag = "SESpeedValFlag",
-        Callback = function(v) S.SpeedVal = v end })
-    MoveTab:CreateSection("Utility")
-    MoveTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "SEInfJumpFlag",
-        Callback = function(v)
-            S.InfiniteJump = v
-            if v then S.Connections.InfJump = UserInputService.JumpRequest:Connect(function() if S.InfiniteJump and Util.IsAlive() then local h = Util.GetHumanoid(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end end)
-            else DConn("InfJump") end
-        end })
-    MoveTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "SENoClipFlag",
-        Callback = function(v)
-            S.NoClip = v
-            if v then S.Connections.NoClip = RunService.Stepped:Connect(function() if S.NoClip then local c = Util.GetCharacter(); if c then for _, p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end end end)
-            else DConn("NoClip") end
-        end })
-    MoveTab:CreateToggle({ Name = "Fly (W/Space/Ctrl)", CurrentValue = false, Flag = "SEFlyFlag",
-        Callback = function(v)
-            S.FlyEnabled = v
-            if v then
-                local bv, bg
-                S.Connections.Fly = RunService.RenderStepped:Connect(function()
-                    local root = Util.GetRoot()
-                    if not root or not Util.IsAlive() then S.FlyEnabled = false; if bv then bv:Destroy() end; if bg then bg:Destroy() end; DConn("Fly"); return end
-                    if not bv then
-                        bv = Instance.new("BodyVelocity"); bv.MaxForce = Vector3.new(math.huge,math.huge,math.huge); bv.Velocity = Vector3.zero; bv.Parent = root
-                        bg = Instance.new("BodyGyro"); bg.MaxTorque = Vector3.new(math.huge,math.huge,math.huge); bg.P = 9000; bg.D = 500; bg.Parent = root
-                    end
-                    local md = Vector3.zero; local cam = Camera.CFrame
-                    if UserInputService:IsKeyDown(Enum.KeyCode.W) then md = md + cam.LookVector end
-                    if UserInputService:IsKeyDown(Enum.KeyCode.S) then md = md - cam.LookVector end
-                    if UserInputService:IsKeyDown(Enum.KeyCode.A) then md = md - cam.RightVector end
-                    if UserInputService:IsKeyDown(Enum.KeyCode.D) then md = md + cam.RightVector end
-                    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then md = md + Vector3.new(0,1,0) end
-                    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then md = md - Vector3.new(0,1,0) end
-                    if md.Magnitude > 0 then md = md.Unit * S.FlySpeed end
-                    bv.Velocity = md; bg.CFrame = cam
-                end)
-            else
-                DConn("Fly")
-                local root = Util.GetRoot()
-                if root then for _, v in ipairs(root:GetChildren()) do if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then v:Destroy() end end end
-            end
-        end })
-    MoveTab:CreateSlider({ Name = "Fly Speed", Range = {10,200}, Increment = 5, Suffix = " studs/s", CurrentValue = 50, Flag = "SEFlySpeedFlag",
-        Callback = function(v) S.FlySpeed = v end })
-
-    -- TELEPORT
-    TeleTab:CreateSection("Teleport")
-    TeleTab:CreateButton({ Name = "TP to Nearest Egg",
-        Callback = function() local e = NearestByName("Egg"); local r = Util.GetRoot(); if e and r then r.CFrame = e.CFrame + Vector3.new(0,3,0) end end })
-    TeleTab:CreateButton({ Name = "TP to Base",
-        Callback = function() local b = FindBase(); local r = Util.GetRoot(); if b and r then r.CFrame = b.CFrame + Vector3.new(0,3,0) end end })
-    TeleTab:CreateButton({ Name = "TP to Treadmill",
-        Callback = function() local t = NearestByName("Treadmill"); local r = Util.GetRoot(); if t and r then r.CFrame = t.CFrame + Vector3.new(0,3,0) end end })
-    TeleTab:CreateToggle({ Name = "Click TP (Right Click)", CurrentValue = false, Flag = "SEClickTPFlag",
-        Callback = function(v)
-            S.ClickTP = v
-            if v then S.Connections.ClickTP = UserInputService.InputBegan:Connect(function(input, processed)
-                if processed then return end
-                if input.UserInputType == Enum.UserInputType.MouseButton2 then
-                    local root = Util.GetRoot()
-                    if root then local m = LocalPlayer:GetMouse(); if m.Hit then root.CFrame = m.Hit + Vector3.new(0,5,0) end end
-                end
-            end) else DConn("ClickTP") end
-        end })
-
-    -- MISC
-    MiscTab:CreateSection("Info")
-    MiscTab:CreateLabel("Steal eggs -> hatch -> train speed")
-    MiscTab:CreateSection("Cleanup")
-    MiscTab:CreateButton({ Name = "Destroy UI",
-        Callback = function()
-            ClearESP()
-            for name, _ in pairs(S.Connections) do DConn(name) end
-            S.AutoSteal=false; S.AutoReturn=false; S.AutoTreadmill=false; S.AutoHatch=false
-            S.SpeedBoost=false; S.InfiniteJump=false; S.NoClip=false; S.FlyEnabled=false; S.ClickTP=false
-            Window:Destroy()
-        end })
-
-    Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Steal An Egg loaded", Duration = 3 })
-end
-
--- ══════════════════════════════════════════════════════════════
 -- LAUNCH
 -- ══════════════════════════════════════════════════════════════
 local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/KeyboardEscapeHub.lua'
@@ -1286,7 +967,6 @@ local function ShowHomeTab()
     HomeTab:CreateLabel("PlaceId: " .. tostring(game.PlaceId))
     HomeTab:CreateButton({ Name = "Reload as Keyboard Escape", Callback = function() Reload("keyboardescape") end })
     HomeTab:CreateButton({ Name = "Reload as Basketball Legends", Callback = function() Reload("basketball") end })
-    HomeTab:CreateButton({ Name = "Reload as Steal An Egg", Callback = function() Reload("stealegg") end })
 end
 
 local Launched = false
@@ -1297,8 +977,6 @@ function LaunchGame()
         require_KeyboardEscape()
     elseif GameName == "basketball" then
         require_Basketball()
-    elseif GameName == "stealegg" then
-        require_StealEgg()
     else
         Launched = false
         ShowHomeTab()
@@ -1312,7 +990,7 @@ if not Launched then
     task.spawn(function()
         task.wait(3)
         if Launched then return end
-        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "stealegg" then
+        if GameName == "keyboardescape" or GameName == "basketball" then
             Reload(GameName)
         end
     end)
