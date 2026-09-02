@@ -72,6 +72,36 @@ function Util.ScanCompare(name, patterns)
     return false
 end
 
+-- Unified "is this input currently held?" for both keyboard keys and mouse buttons.
+-- AimKey stores a token string (e.g. "LMouse","RMouse","X",...). Returns KeyCode or nil.
+function Util.ResolveInput(token)
+    if not token then return nil end
+    local mouse = {
+        ["LMouse"] = Enum.UserInputType.MouseButton1,
+        ["RMouse"] = Enum.UserInputType.MouseButton2,
+        ["MMouse"] = Enum.UserInputType.MouseButton3,
+        ["MB4"]    = Enum.UserInputType.MouseButton4,
+        ["MB5"]    = Enum.UserInputType.MouseButton5,
+    }
+    if mouse[token] then return mouse[token] end
+    -- otherwise it's a keyboard KeyCode token
+    local kc = Enum.KeyCode[token]
+    if kc then return kc end
+    return nil
+end
+
+function Util.IsHeld(token)
+    local inp = Util.ResolveInput(token)
+    if not inp then return false end
+    local inpType = typeof(inp)
+    if inpType == "EnumItem" and inp.EnumType == Enum.KeyCode then
+        return UserInputService:IsKeyDown(inp)
+    elseif inpType == "EnumItem" and inp.EnumType == Enum.UserInputType then
+        return UserInputService:IsMouseButtonPressed(inp)
+    end
+    return false
+end
+
 -- ══════════════════════════════════════════════════════════════
 -- GAME DETECTION
 -- ══════════════════════════════════════════════════════════════
@@ -969,7 +999,7 @@ function require_Sniper()
         Aimbot = false, AimFOV = 20, AimTeam = true,
         AimConfig = "Legit", -- "Legit" or "Rage"
         AimHitbox = "Head",
-        AimKey = Enum.KeyCode.LeftButton, -- key held to drive aimbot
+        AimKey = "LMouse", -- token for the input held to drive aimbot (see Util.ResolveInput)
         LegitSmooth = 0.25, LegitOffset = 0.6, -- offset in studs (humanized miss window)
         Triggerbot = false,
         ESP = false, ESPTeamOnly = true,
@@ -1055,7 +1085,7 @@ function require_Sniper()
             if not S.Aimbot then break end
             local cam = Camera
             if not cam then break end
-            local firing = UserInputService:IsKeyDown(S.AimKey) or S.Triggerbot
+            local firing = Util.IsHeld(S.AimKey) or S.Triggerbot
             if firing then
                 local fov = (S.AimConfig == "Rage") and 360 or S.AimFOV
                 local camPos, camLook = cam.CFrame.Position, cam.CFrame.LookVector
@@ -1123,12 +1153,12 @@ function require_Sniper()
             S.Aimbot = v
             if v then task.spawn(AimbotLoop) end
         end })
-    AimTab:CreateDropdown({ Name = "Hold Key for Aimbot", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Middle","Mouse Button 4","Mouse Button 5"},
+    AimTab:CreateDropdown({ Name = "Hold Key for Aimbot", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Button 3","Mouse Button 4","Mouse Button 5"},
         CurrentOption = {"Left Mouse"}, Flag = "SDAimKeyFlag",
         Callback = function(o)
-            local k = o[1]
-            local map = { ["Left Mouse"] = Enum.KeyCode.LeftMouse, ["Right Mouse"] = Enum.KeyCode.RightMouse, ["Mouse Middle"] = Enum.KeyCode.MiddleMouse, ["Mouse Button 4"] = Enum.KeyCode.Button4, ["Mouse Button 5"] = Enum.KeyCode.Button5 }
-            S.AimKey = map[k] or Enum.KeyCode[k] or Enum.KeyCode.LeftButton
+            local lbl = o[1]
+            local tmap = { ["Left Mouse"]="LMouse", ["Right Mouse"]="RMouse", ["Mouse Button 3"]="MMouse", ["Mouse Button 4"]="MB4", ["Mouse Button 5"]="MB5" }
+            S.AimKey = tmap[lbl] or lbl
         end })
     AimTab:CreateToggle({ Name = "Triggerbot (aim while just aiming)", CurrentValue = false, Flag = "SDTriggerFlag",
         Callback = function(v) S.Triggerbot = v end })
@@ -1294,7 +1324,7 @@ function require_Hypershot()
 
     local H = {
         Aimbot = false, AimFOV = 25, AimTeam = true, AimConfig = "Legit", AimHitbox = "Head",
-        AimKey = Enum.KeyCode.LeftButton, -- key held to drive aimbot
+        AimKey = "LMouse", -- token for the input held to drive aimbot (see Util.ResolveInput)
         LegitSmooth = 0.25, LegitOffset = 0.6,
         Triggerbot = false, AutoFire = false,
         ESP = false, TeamESP = false,
@@ -1307,7 +1337,7 @@ function require_Hypershot()
     }
 
     local function DConn(name) if H.Connections[name] then pcall(function() H.Connections[name]:Disconnect() end); H.Connections[name] = nil end end
-    local function Util()
+    local function GetParts()
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -1363,10 +1393,6 @@ function require_Hypershot()
     end
 
     local firingLock = false
-    local function ShouldFire(target)
-        if H.Triggerbot then return true end
-        return UserInputService:IsKeyDown(Enum.KeyCode.LeftButton)
-    end
 
     local function AimbotLoop()
         while H.Aimbot do
@@ -1374,9 +1400,9 @@ function require_Hypershot()
             if not H.Aimbot then break end
             local cam = workspace.CurrentCamera
             if not cam then break end
-            local myC, myHrp = Util()
+            local myC, myHrp = GetParts()
             if not (myC and myHrp) then break end
-            local holding = UserInputService:IsKeyDown(H.AimKey)
+            local holding = Util.IsHeld(H.AimKey)
             local wantShoot = holding or H.Triggerbot
             if wantShoot and H.Aimbot then
                 local fov = (H.AimConfig == "Rage") and 360 or H.AimFOV
@@ -1442,7 +1468,7 @@ function require_Hypershot()
     -- noclip
     H.Connections["NoClip"] = RunService.Stepped:Connect(function()
         if H.NoClip then
-            local c, hrp = Util()
+            local c, hrp = GetParts()
             for _, part in ipairs(c and c:GetDescendants() or {}) do
                 if part:IsA("BasePart") then part.CanCollide = false end
             end
@@ -1451,7 +1477,7 @@ function require_Hypershot()
 
     -- fly
     H.Connections["Fly"] = RunService.RenderStepped:Connect(function()
-        local c, hrp, hum = Util()
+        local c, hrp, hum = GetParts()
         if not (c and hrp and hum) then return end
         if H.FlyEnabled then
             hum.PlatformStand = true
@@ -1474,7 +1500,7 @@ function require_Hypershot()
     -- infinite jump
     H.Connections["InfJump"] = UserInputService.JumpRequest:Connect(function()
         if H.InfiniteJump then
-            local _, hrp, hum = Util()
+            local _, hrp, hum = GetParts()
             if hrp and hum and hum:GetState() ~= Enum.HumanoidStateType.Falling then
                 hrp:ApplyImpulse(Vector3.new(0, H.JumpPower * 45, 0))
             end
@@ -1483,7 +1509,7 @@ function require_Hypershot()
 
     -- bhop (auto-jump on landing while holding space)
     H.Connections["BHop"] = RunService.Heartbeat:Connect(function()
-        local _, hrp, hum = Util()
+        local _, hrp, hum = GetParts()
         if H.BHop and hrp and hum and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
             if hum:GetState() == Enum.HumanoidStateType.Landed or hum:GetState() == Enum.HumanoidStateType.Running then
                 hum.Jump = true
@@ -1494,7 +1520,7 @@ function require_Hypershot()
     -- movement core loop (walkspeed)
     RunService.RenderStepped:Connect(function()
         if H.WalkSpeedEnabled then
-            local _, _, hum = Util()
+            local _, _, hum = GetParts()
             if hum then hum.WalkSpeed = H.WalkSpeedValue end
         end
     end)
@@ -1517,12 +1543,12 @@ function require_Hypershot()
             H.Aimbot = v
             if v then task.spawn(AimbotLoop) end
         end })
-    AimTab:CreateDropdown({ Name = "Hold Key for Aimbot", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Middle","Mouse Button 4","Mouse Button 5"},
+    AimTab:CreateDropdown({ Name = "Hold Key for Aimbot", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Button 3","Mouse Button 4","Mouse Button 5"},
         CurrentOption = {"Left Mouse"}, Flag = "HSAimKeyFlag",
         Callback = function(o)
-            local k = o[1]
-            local map = { ["Left Mouse"] = Enum.KeyCode.LeftMouse, ["Right Mouse"] = Enum.KeyCode.RightMouse, ["Mouse Middle"] = Enum.KeyCode.MiddleMouse, ["Mouse Button 4"] = Enum.KeyCode.Button4, ["Mouse Button 5"] = Enum.KeyCode.Button5 }
-            H.AimKey = map[k] or Enum.KeyCode[k] or Enum.KeyCode.LeftButton
+            local lbl = o[1]
+            local tmap = { ["Left Mouse"]="LMouse", ["Right Mouse"]="RMouse", ["Mouse Button 3"]="MMouse", ["Mouse Button 4"]="MB4", ["Mouse Button 5"]="MB5" }
+            H.AimKey = tmap[lbl] or lbl
         end })
     AimTab:CreateToggle({ Name = "Triggerbot (aim + shoot while just aiming)", CurrentValue = false, Flag = "HSTrigFlag",
         Callback = function(v) H.Triggerbot = v end })
