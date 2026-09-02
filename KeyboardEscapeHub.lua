@@ -23,6 +23,27 @@ local Camera = Workspace.CurrentCamera
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 -- KNOWN COORDINATES (from game research)
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- STAGE WIN PAD COORDINATES (hardcoded from in-game)
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+local STAGE_CFAMES = {
+    [1]  = CFrame.new(-16.488636, 6.8571434, 284.741302),
+    [2]  = CFrame.new(-16.488636, 6.8571434, 506.733978),
+    [3]  = CFrame.new(-16.488636, 75.1460419, 774.375122),
+    [4]  = CFrame.new(-16.488636, 75.1460419, 1108.35461),
+    [5]  = CFrame.new(-16.488636, 75.1460419, 1411.3446),
+    [6]  = CFrame.new(-538.371643, 52.5018692, 1447.88953),
+    [7]  = CFrame.new(-1007.7088, 52.5018692, 1447.88953),
+    [8]  = CFrame.new(-1123.46582, 294.501862, 1447.88953),
+    [9]  = nil, -- TODO: waiting for coords
+    [10] = nil,
+    [11] = nil,
+    [12] = nil,
+    [13] = nil,
+    [14] = nil,
+    [15] = nil,
+}
+
 local WIN_COORDS = {
     World1 = Vector3.new(-14003.95, 750.54, 3066),
     World2 = Vector3.new(7984, 728, 5144),
@@ -513,7 +534,24 @@ local function SaveCoordsForStage(stage, pos)
 end
 
 local function GetSavedCoord(stage)
+    -- Hardcoded coords take priority
+    if STAGE_CFAMES[stage] then
+        return STAGE_CFAMES[stage].Position
+    end
+    -- Fallback to manually saved coords
     return SavedStageCoords[stage]
+end
+
+local function GetStageCFrame(stage)
+    -- Returns full CFrame (position + rotation) for precise teleport
+    if STAGE_CFAMES[stage] then
+        return STAGE_CFAMES[stage]
+    end
+    local saved = SavedStageCoords[stage]
+    if saved then
+        return CFrame.new(saved)
+    end
+    return nil
 end
 
 local CoordStatus = FarmTab:CreateLabel("Coords saved: none yet")
@@ -596,29 +634,29 @@ FarmTab:CreateToggle({
             task.spawn(function()
                 while State.AutoWin do
                     local root = GetRoot()
-                    if root and IsAlive() then
-                        local targetPos = GetSavedCoord(SelectedStage)
+                        if root and IsAlive() then
+                        local targetCF = GetStageCFrame(SelectedStage)
 
-                        if not targetPos then
+                        if not targetCF then
                             -- Fallback: try scanning for a pad near current position
                             local nearest = GetNearestWinPad()
                             if nearest then
-                                targetPos = nearest.Position + Vector3.new(0, 3, 0)
+                                targetCF = nearest.CFrame + Vector3.new(0, 3, 0)
                             end
                         end
 
-                        if targetPos then
-                            local tpPos = targetPos + Vector3.new(0, 3, 0)
+                        if targetCF then
+                            local tpCFrame = targetCF + Vector3.new(0, 3, 0)
                             if State.AutoWinTween then
                                 local tween = TweenService:Create(
                                     root,
                                     TweenInfo.new(State.AutoWinTweenSpeed, Enum.EasingStyle.Linear),
-                                    {CFrame = CFrame.new(tpPos)}
+                                    {CFrame = tpCFrame}
                                 )
                                 tween:Play()
                                 tween.Completed:Wait()
                             else
-                                root.CFrame = CFrame.new(tpPos)
+                                root.CFrame = tpCFrame
                             end
                         end
                     end
@@ -1154,11 +1192,11 @@ TeleportTab:CreateLabel("Uses Stage Number from Auto Farm tab")
 TeleportTab:CreateButton({
     Name = "TP to Selected Stage Win Pad",
     Callback = function()
-        local coord = GetSavedCoord(SelectedStage)
+        local coord = GetStageCFrame(SelectedStage)
         if coord then
             local root = GetRoot()
             if root then
-                root.CFrame = CFrame.new(coord + Vector3.new(0, 3, 0))
+                root.CFrame = coord + Vector3.new(0, 3, 0)
             end
         else
             local pad = GetWinPadByIndex(SelectedStage)
