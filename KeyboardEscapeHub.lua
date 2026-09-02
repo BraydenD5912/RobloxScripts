@@ -47,7 +47,8 @@ local State = {
 
     -- Auto Win
     AutoWin = false,
-    AutoWinMode = "Scan", -- "Scan" | "World1" | "World2" | "World3"
+    AutoWinMode = "Stage", -- "Stage" | "Nearest"
+    AutoWinTarget = nil,
     AutoWinTween = false,
     AutoWinTweenSpeed = 0.5,
     AutoWinDelay = 0.3,
@@ -148,13 +149,16 @@ end
 pcall(ScanRemotes)
 
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
--- WIN PAD SCANNER
+-- WIN PAD SCANNER â€” stage-aware, filters world-end zones
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+local WinPadCache = { pads = {}, lastScan = 0 }
+
 local function IsYellowPad(part)
     if not part:IsA("BasePart") then return false end
     local name = part.Name:lower()
     if name:find("win") or name:find("trophy") or name:find("finish") or name:find("end")
-        or name:find("winpad") or name:find("winblock") or name:find("safe") then
+        or name:find("winpad") or name:find("winblock") or name:find("safe")
+        or name:find("pad") then
         return true
     end
     local r, g, b = part.Color.R, part.Color.G, part.Color.B
@@ -164,18 +168,35 @@ local function IsYellowPad(part)
     return false
 end
 
-local function FindWinPads()
+-- Filter out large world-end zones / giant structures by size
+local function IsStageWinPad(part)
+    local size = part.Size
+    local maxDim = math.max(size.X, math.max(size.Y, size.Z))
+    -- Stage win pads are small (buttons / floor pads a few studs)
+    -- World-end structures are huge (hundreds of studs)
+    if maxDim < 1 or maxDim > 40 then
+        return false
+    end
+    return true
+end
+
+local function FindWinPads(forceRescan)
+    if not forceRescan and WinPadCache.pads and #WinPadCache.pads > 0
+        and os.clock() - WinPadCache.lastScan < 5 then
+        return WinPadCache.pads
+    end
+
     local pads = {}
     local seen = {}
 
     local function scan(parent)
         for _, obj in ipairs(parent:GetChildren()) do
-            if obj:IsA("BasePart") and IsYellowPad(obj) and not seen[obj] then
+            if obj:IsA("BasePart") and IsYellowPad(obj) and IsStageWinPad(obj) and not seen[obj] then
                 seen[obj] = true
                 table.insert(pads, obj)
             elseif obj:IsA("Model") then
                 local primary = obj.PrimaryPart
-                if primary and IsYellowPad(primary) and not seen[primary] then
+                if primary and IsYellowPad(primary) and IsStageWinPad(primary) and not seen[primary] then
                     seen[primary] = true
                     table.insert(pads, primary)
                 end
@@ -187,48 +208,49 @@ local function FindWinPads()
     end
 
     scan(Workspace)
+
+    -- Sort pads by distance to spawn (closest = earliest stage)
+    local spawn = Workspace:FindFirstChild("SpawnLocation") or Workspace:FindFirstChild("Lobby")
+    local origin = spawn and (spawn:IsA("BasePart") and spawn.Position or Vector3.zero) or Vector3.zero
+    if #pads > 1 then
+        table.sort(pads, function(a, b)
+            return (a.Position - origin).Magnitude < (b.Position - origin).Magnitude
+        end)
+    end
+
+    WinPadCache.pads = pads
+    WinPadCache.lastScan = os.clock()
     return pads
 end
 
-local function GetBestWinPad()
-    local pads = FindWinPads()
+-- Get a pad by stage number (1 = nearest to spawn), clamped to available
+local function GetWinPadByIndex(index)
+    local pads = FindWinPads(true)
+    if #pads == 0 then return nil end
+    index = math.clamp(index, 1, #pads)
+    return pads[index]
+end
+
+-- Nearest pad to the player (for one-off button)
+local function GetNearestWinPad()
+    local pads = FindWinPads(true)
     if #pads == 0 then return nil end
 
     local root = GetRoot()
     if not root then return pads[1] end
 
-    -- Prefer pads by name (higher stage = more wins)
-    local best = nil
-    local bestScore = -math.huge
-
+    local nearest = nil
+    local nearestDist = math.huge
     for _, pad in ipairs(pads) do
         if pad and pad.Parent then
-            local score = 0
-            local name = pad.Name:lower()
-
-            -- Score by name hints
-            for stage = 15, 1, -1 do
-                if name:find(tostring(stage)) then
-                    score = score + stage * 1000
-                    break
-                end
-            end
-
-            -- Score by position (higher Z = further in World 1, higher Y = further in World 2)
-            score = score + pad.Position.Z * 0.1 + pad.Position.Y * 0.5
-
-            -- Score by distance (closer is better as tiebreaker)
             local dist = (root.Position - pad.Position).Magnitude
-            score = score - dist * 0.01
-
-            if score > bestScore then
-                bestScore = score
-                best = pad
+            if dist < nearestDist then
+                nearestDist = dist
+                nearest = pad
             end
         end
     end
-
-    return best
+    return nearest
 end
 
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -457,22 +479,44 @@ FarmTab:CreateSlider({
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 FarmTab:CreateSection("Auto Win")
 
-FarmTab:CreateDropdown({
-    Name = "Win Mode",
-    Options = {"Scan (Best Pad)", "World 1 (Fixed)", "World 2 (Fixed)", "World 3 (Fixed)"},
-    CurrentOption = {"Scan (Best Pad)"},
-    Flag = "WinModeFlag",
-    Callback = function(Option)
-        local opt = Option[1]
-        if opt:find("Scan") then
-            State.AutoWinMode = "Scan"
-        elseif opt:find("1") then
-            State.AutoWinMode = "World1"
-        elseif opt:find("2") then
-            State.AutoWinMode = "World2"
-        elseif opt:find("3") then
-            State.AutoWinMode = "World3"
-        end
+-- Build stage selector from detected pads
+local StageNumber = 1
+local MaxStages = 1
+local StageLabel
+
+local function UpdateStagePopup()
+    local count = FindWinPads(true)
+    MaxStages = math.max(1, #count)
+    if StageLabel then
+        StageLabel:Set(string.format("Found %d stage win pads (1 = nearest spawn)", MaxStages))
+        pcall(function()
+            StageSlider:Set(math.clamp(StageNumber, 1, MaxStages))
+        end)
+    end
+end
+
+local StageSlider = FarmTab:CreateSlider({
+    Name = "Stage to Farm (1 = nearest spawn)",
+    Range = {1, 15},
+    Increment = 1,
+    Suffix = "",
+    CurrentValue = 1,
+    Flag = "StageNumberFlag",
+    Callback = function(Value)
+        StageNumber = Value
+        UpdateStagePopup()
+    end,
+})
+
+StageLabel = FarmTab:CreateLabel("Scanning for win pads...")
+
+-- Manual button to rescan
+FarmTab:CreateButton({
+    Name = "Rescan Win Pads",
+    Callback = function()
+        WinPadCache.pads = {}
+        WinPadCache.lastScan = 0
+        UpdateStagePopup()
     end,
 })
 
@@ -489,15 +533,17 @@ FarmTab:CreateToggle({
                     if root and IsAlive() then
                         local targetPos = nil
 
-                        if State.AutoWinMode == "Scan" then
-                            local pad = GetBestWinPad()
-                            if pad then
-                                targetPos = pad.Position + Vector3.new(0, 5, 0)
+                        if State.AutoWinMode == "Stage" then
+                            -- Farm the selected stage pad specifically
+                            local target = State.AutoWinTarget
+                            if target then
+                                targetPos = target.Position + Vector3.new(0, 5, 0)
                             end
                         else
-                            targetPos = WIN_COORDS[State.AutoWinMode]
-                            if targetPos then
-                                targetPos = targetPos + Vector3.new(0, 5, 0)
+                            -- Fallback: nearest pad
+                            local nearest = GetNearestWinPad()
+                            if nearest then
+                                targetPos = nearest.Position + Vector3.new(0, 5, 0)
                             end
                         end
 
@@ -518,6 +564,29 @@ FarmTab:CreateToggle({
                     task.wait(State.AutoWinDelay)
                 end
             end)
+        end
+    end,
+})
+
+-- StageSelector uses the slider value to pick which pad to farm
+local StageSelector = FarmTab:CreateButton({
+    Name = "Lock Stage as Farm Target",
+    Callback = function()
+        State.AutoWinMode = "Stage"
+        local pad = GetWinPadByIndex(StageNumber)
+        if pad then
+            State.AutoWinTarget = pad
+            Rayfield:Notify({
+                Title = "Stage Locked",
+                Content = string.format("Farm target set to stage pad %d", StageNumber),
+                Duration = 3,
+            })
+        else
+            Rayfield:Notify({
+                Title = "No Pad Found",
+                Content = "Could not find a stage pad for target " .. StageNumber,
+                Duration = 3,
+            })
         end
     end,
 })
@@ -1036,6 +1105,53 @@ TeleportTab:CreateButton({
         local root = GetRoot()
         if root then
             root.CFrame = CFrame.new(WIN_COORDS.World3 + Vector3.new(0, 5, 0))
+        end
+    end,
+})
+
+TeleportTab:CreateSection("Stage Teleport")
+
+TeleportTab:CreateSlider({
+    Name = "Stage Pad Target",
+    Range = {1, 15},
+    Increment = 1,
+    Suffix = "",
+    CurrentValue = 1,
+    Flag = "TPStageFlag",
+    Callback = function(Value)
+        State._tpStageIndex = Value
+    end,
+})
+
+TeleportTab:CreateButton({
+    Name = "TP to Selected Stage Win Pad",
+    Callback = function()
+        local index = State._tpStageIndex or 1
+        local pad = GetWinPadByIndex(index)
+        if pad then
+            local root = GetRoot()
+            if root then
+                root.CFrame = pad.CFrame + Vector3.new(0, 5, 0)
+            end
+        else
+            Rayfield:Notify({
+                Title = "No Pad",
+                Content = "No stage pad found at index " .. index,
+                Duration = 3,
+            })
+        end
+    end,
+})
+
+TeleportTab:CreateButton({
+    Name = "TP to Nearest Win Pad",
+    Callback = function()
+        local pad = GetNearestWinPad()
+        if pad then
+            local root = GetRoot()
+            if root then
+                root.CFrame = pad.CFrame + Vector3.new(0, 5, 0)
+            end
         end
     end,
 })
