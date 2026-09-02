@@ -949,6 +949,15 @@ end
 -- ══════════════════════════════════════════════════════════════
 -- LAUNCH
 -- ══════════════════════════════════════════════════════════════
+local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/KeyboardEscapeHub.lua'
+
+-- Fully re-execute the hub from scratch so never build tabs on a destroyed window.
+local function Reload(gameName)
+    _G.OutcomeGame = gameName
+    pcall(function() Window:Destroy() end)
+    loadstring(game:HttpGet(HUB_SOURCE_URL))()
+end
+
 local HomeBuilt = false
 local function ShowHomeTab()
     if HomeBuilt then return end
@@ -957,8 +966,8 @@ local function ShowHomeTab()
     HomeTab:CreateSection("Game Not Detected")
     HomeTab:CreateLabel("Game: " .. tostring(game.Name))
     HomeTab:CreateLabel("PlaceId: " .. tostring(game.PlaceId))
-    HomeTab:CreateButton({ Name = "Reload as Keyboard Escape", Callback = function() Window:Destroy(); require_KeyboardEscape() end })
-    HomeTab:CreateButton({ Name = "Reload as Basketball Legends", Callback = function() Window:Destroy(); require_Basketball() end })
+    HomeTab:CreateButton({ Name = "Reload as Keyboard Escape", Callback = function() Reload("keyboardescape") end })
+    HomeTab:CreateButton({ Name = "Reload as Basketball Legends", Callback = function() Reload("basketball") end })
 end
 
 local Launched = false
@@ -978,13 +987,12 @@ end
 LaunchGame()
 
 if not Launched then
-    -- Async product-info fallback may resolve the game later
+    -- Async product-info fallback may resolve the game later; re-execute fresh.
     task.spawn(function()
         task.wait(3)
         if Launched then return end
         if GameName == "keyboardescape" or GameName == "basketball" then
-            Window:Destroy()
-            LaunchGame()
+            Reload(GameName)
         end
     end)
 end
