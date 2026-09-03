@@ -4663,21 +4663,39 @@ function require_OneTap()
 
     local firingLock = false
     local function CameraAimLoop()
+        print("[OUTCOME] CameraAim loop started, FOV=" .. OT.AimFOV .. " Key=" .. OT.AimKey .. " Trigger=" .. tostring(OT.Triggerbot))
+        local lastLog = 0
         while OT.CameraAim do
             task.wait()
-            if not OT.CameraAim then break end
+            if not OT.CameraAim then print("[OUTCOME] CameraAim loop exit"); break end
             local cam = Workspace.CurrentCamera
-            if not cam then continue end
+            if not cam then 
+                if os.clock()-lastLog>2 then print("[OUTCOME] CameraAim: no camera"); lastLog=os.clock() end
+                continue 
+            end
             local myC, myHrp = GetParts()
-            if not (myC and myHrp) or not IsAliveChar(myC) then continue end
+            if not (myC and myHrp) or not IsAliveChar(myC) then 
+                if os.clock()-lastLog>2 then print("[OUTCOME] CameraAim: not alive, deployed=", myC and myC:GetAttribute("deployed") or "no char"); lastLog=os.clock() end
+                continue 
+            end
             local wantShoot = OT.Triggerbot or Util.IsHeld(OT.AimKey)
-            if not wantShoot then continue end
+            if not wantShoot then 
+                if os.clock()-lastLog>3 then 
+                    --print("[OUTCOME] CameraAim: waiting for key", OT.AimKey, "held?", Util.IsHeld(OT.AimKey))
+                end
+                continue 
+            end
             local fov = (OT.AimConfig == "Rage") and 2000 or OT.SilentFOV
             -- for camera aim we use AimFOV
             fov = (OT.AimConfig == "Rage") and 2000 or OT.AimFOV
             -- reuse GetNearestTarget with AimHitbox
             local targetChar, targetPart = GetNearestTarget(fov, OT.AimHitbox)
+            if not targetChar and os.clock()-lastLog>1 then
+                print("[OUTCOME] CameraAim: no target in FOV", fov, "wallCheck", OT.AimWallCheck, "players", #Players:GetPlayers()-1)
+                lastLog=os.clock()
+            end
             if targetChar and targetPart then
+                if os.clock()-lastLog>0.5 then print("[OUTCOME] CameraAim LOCK", targetChar.Name, targetPart.Name, "dist", math.floor((targetPart.Position - cam.CFrame.Position).Magnitude)); lastLog=os.clock() end
                 local tp = targetPart.Position
                 if OT.AimConfig == "Rage" then
                     local sp, onScreen = cam:WorldToScreenPoint(tp)
@@ -4808,9 +4826,14 @@ function require_OneTap()
                 hl.Parent = c
             end)
         end
-        if hl then table.insert(ESPItems, hl) end
-        -- Billboard name + distance
-        local hrp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head") or c:FindFirstChildWhichIsA("BasePart")
+        if hl then 
+            table.insert(ESPItems, hl) 
+            print("[OUTCOME] Highlight created for", pl.Name, hl.Parent and hl.Parent.Name or "nil parent")
+        else
+            print("[OUTCOME] Highlight FAILED for", pl.Name)
+        end
+        -- Billboard name + distance (always try)
+        local hrp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head") or c:FindFirstChild("UpperTorso") or c:FindFirstChildWhichIsA("BasePart")
         if hrp then
             local bb = Instance.new("BillboardGui")
             bb.Name = "_OT_LABEL"
@@ -4818,7 +4841,8 @@ function require_OneTap()
             bb.StudsOffset = Vector3.new(0, 3.5, 0)
             bb.AlwaysOnTop = true
             bb.Adornee = hrp
-            bb.Parent = hrp
+            pcall(function() bb.Parent = hrp end)
+            if not bb.Parent then bb.Parent = c end
             local _, myHrp = GetParts()
             local dist = myHrp and math.floor((hrp.Position - myHrp.Position).Magnitude) or 0
             local lbl = Instance.new("TextLabel")
@@ -4835,22 +4859,41 @@ function require_OneTap()
     end
 
     local function ESPLoop()
+        print("[OUTCOME] ESP loop started, ESP=" .. tostring(OT.ESP))
         while OT.ESP do
+            local count = 0
+            for _, pl in ipairs(Players:GetPlayers()) do if pl ~= LocalPlayer and pl.Character then count = count + 1 end end
+            if count == 0 then
+                print("[OUTCOME] ESP: no other players found")
+            end
             local existing = {}
-            for _, v in ipairs(ESPItems) do if v:IsA("Highlight") and v.Adornee then existing[v.Adornee] = true end end
+            for _, v in ipairs(ESPItems) do
+                if v:IsA("Highlight") and v.Adornee then existing[v.Adornee] = true
+                elseif v:IsA("BoxHandleAdornment") and v.Adornee then existing[v.Adornee.Parent] = true
+                end
+            end
+            local created = 0
             for _, pl in ipairs(Players:GetPlayers()) do
                 if pl ~= LocalPlayer and pl.Character and not existing[pl.Character] then
-                    if IsAliveForESP(pl.Character) then
+                    local alive = IsAliveForESP(pl.Character)
+                    -- debug
+                    if not alive then
+                        -- still try to show for debugging, uncomment to force
+                        -- alive = true
+                        print("[OUTCOME] ESP skip not alive:", pl.Name)
+                    end
+                    if alive then
                         local isEnemy = true
                         if OT.TeamESP and LocalPlayer.Team and pl.Team and LocalPlayer.Team == pl.Team then isEnemy=false end
                         if isEnemy then
-                            local color = Color3.fromRGB(255,60,60)
-                            MakeHighlight(pl, color)
+                            MakeHighlight(pl, Color3.fromRGB(255,60,60))
+                            created = created + 1
                         end
                     end
                 end
             end
-            task.wait(1.0)
+            if created > 0 then print("[OUTCOME] ESP created", created, "highlights, total", #ESPItems) end
+            task.wait(0.8)
             -- prune stale
             for i=#ESPItems,1,-1 do
                 local v = ESPItems[i]
@@ -5005,6 +5048,28 @@ function require_OneTap()
         Callback = function(v) OT.AimWallCheck=v end })
     AimTab:CreateToggle({ Name = "Team Check (FFA off)", CurrentValue = false, Flag = "OT_TeamFlag",
         Callback = function(v) OT.AimTeam=v end })
+    AimTab:CreateButton({ Name = "TEST: Force Snap to Nearest (no key)", Callback = function()
+        local cam = Workspace.CurrentCamera
+        if not cam then return end
+        local tc, tp = GetNearestTarget(OT.AimFOV, OT.AimHitbox)
+        if tc and tp then
+            print("[OUTCOME] TEST snap to", tc.Name, tp.Name)
+            Rayfield:Notify({Title="Test Snap", Content=tc.Name.." -> "..tp.Name, Duration=2})
+            local sp, onScreen = cam:WorldToScreenPoint(tp.Position)
+            if onScreen then
+                if mousemoverel then
+                    local mp = UserInputService:GetMouseLocation()
+                    mousemoverel(sp.X - mp.X, sp.Y - mp.Y)
+                else
+                    cam.CFrame = CFrame.lookAt(cam.CFrame.Position, tp.Position)
+                end
+            end
+        else
+            Rayfield:Notify({Title="Test", Content="No target found! Check FOV/WallCheck", Duration=2})
+            print("[OUTCOME] TEST no target")
+        end
+    end })
+    AimTab:CreateLabel("If TEST button snaps, hold-key is the issue")
 
     AimTab:CreateSection("Hitbox")
     AimTab:CreateToggle({ Name = "Hitbox Expander (Hitbox folder)", CurrentValue = false, Flag = "OT_HitboxFlag2",
