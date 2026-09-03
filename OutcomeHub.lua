@@ -4254,41 +4254,75 @@ function require_OneTap()
     local Camera = Workspace.CurrentCamera
     Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function() Camera = Workspace.CurrentCamera end)
 
-    -- attempt to load WeaponPackets for silent aim (brute-force for Xeno + path changes)
+    -- attempt to load WeaponPackets for silent aim (Xeno-safe: getgc + brute force, avoids require blocked)
     local WeaponPackets = nil
     local WeaponPacketsPath = nil
     local function FindWeaponPackets()
-        -- try known paths first
+        -- 1. Try getgc (game already required it internally, bypasses Xeno's require block)
+        if getgc then
+            pcall(function()
+                for _, tbl in ipairs(getgc(true)) do
+                    if type(tbl) == "table" and rawget(tbl, "useWeapon") and type(rawget(tbl, "useWeapon")) == "table" and rawget(rawget(tbl, "useWeapon"), "send") then
+                        WeaponPackets = tbl
+                        WeaponPacketsPath = "getgc()"
+                        print("[OUTCOME] OneTap Found WeaponPackets via getgc")
+                        return tbl
+                    end
+                end
+            end)
+            if WeaponPackets then return WeaponPackets end
+            -- also try getgc without true
+            pcall(function()
+                for _, v in ipairs(getgc()) do
+                    if type(v) == "table" and rawget(v, "useWeapon") then
+                        WeaponPackets = v
+                        WeaponPacketsPath = "getgc()2"
+                        print("[OUTCOME] OneTap Found WeaponPackets via getgc2")
+                        return v
+                    end
+                end
+            end)
+            if WeaponPackets then return WeaponPackets end
+        end
+        -- 2. Try getreg
+        if getreg then
+            pcall(function()
+                for _, v in ipairs(getreg()) do
+                    if type(v) == "table" and rawget(v, "useWeapon") and type(rawget(v, "useWeapon")) == "table" then
+                        WeaponPackets = v
+                        WeaponPacketsPath = "getreg()"
+                        print("[OUTCOME] OneTap Found WeaponPackets via getreg")
+                        return v
+                    end
+                end
+            end)
+            if WeaponPackets then return WeaponPackets end
+        end
+        -- 3. Try direct require on known paths (may fail on Xeno with non-RobloxScript)
         local tries = {
             function() return ReplicatedStorage:FindFirstChild("Common") and ReplicatedStorage.Common:FindFirstChild("Packets") and ReplicatedStorage.Common.Packets:FindFirstChild("WeaponPackets") end,
             function() return ReplicatedStorage:FindFirstChild("Packets") and ReplicatedStorage.Packets:FindFirstChild("WeaponPackets") end,
-            function() return ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("WeaponPackets") end,
         }
         for _, fn in ipairs(tries) do
             local ok, mod = pcall(fn)
             if ok and mod then
                 WeaponPacketsPath = mod:GetFullName()
                 local ok2, req = pcall(function() return require(mod) end)
-                if ok2 and req and req.useWeapon then return req end
-            end
-        end
-        -- brute force: scan all descendants for useWeapon
-        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj.Name == "WeaponPackets" and obj:IsA("ModuleScript") then
-                WeaponPacketsPath = obj:GetFullName()
-                local ok2, req = pcall(function() return require(obj) end)
-                if ok2 and req and req.useWeapon and req.useWeapon.send then
-                    print("[OUTCOME] OneTap Found WeaponPackets via brute force:", WeaponPacketsPath)
+                if ok2 and req and req.useWeapon then
+                    print("[OUTCOME] OneTap Found via require:", WeaponPacketsPath)
                     return req
+                else
+                    print("[OUTCOME] OneTap require failed on", WeaponPacketsPath, req)
                 end
             end
         end
+        -- 4. Brute force ModuleScripts containing useWeapon
         for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj.Name:lower():find("weapon") and obj:IsA("ModuleScript") then
+            if obj:IsA("ModuleScript") and obj.Name:lower():find("weapon") then
                 local ok2, req = pcall(function() return require(obj) end)
                 if ok2 and req and req.useWeapon and req.useWeapon.send then
                     WeaponPacketsPath = obj:GetFullName()
-                    print("[OUTCOME] OneTap Found WeaponPackets via weapon scan:", WeaponPacketsPath)
+                    print("[OUTCOME] OneTap Found via weapon scan:", WeaponPacketsPath)
                     return req
                 end
             end
@@ -4296,18 +4330,35 @@ function require_OneTap()
         return nil
     end
     WeaponPackets = FindWeaponPackets()
-    print("[OUTCOME] OneTap WeaponPackets:", WeaponPackets and ("found at " .. (WeaponPacketsPath or "unknown")) or "NOT FOUND - silent aim disabled, using camera aim only")
-    if not WeaponPackets then
-        -- fallback: try to find remote that handles shooting (FireServer hook)
+    -- also try to locate ByteNet RemoteEvent for hook fallback
+    local ByteNetRemote = nil
+    local ByteNetPath = nil
+    pcall(function()
         for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj:IsA("RemoteEvent") and obj.Name:lower():find("weapon") then
-                print("[OUTCOME] OneTap Fallback RemoteEvent found:", obj:GetFullName())
-            end
-            if obj:IsA("RemoteEvent") and (obj.Name:lower():find("shoot") or obj.Name:lower():find("fire") or obj.Name:lower():find("hit")) then
-                print("[OUTCOME] OneTap Potential Shoot Remote:", obj:GetFullName())
+            if obj:IsA("RemoteEvent") and obj.Name:lower():find("bytenet") then
+                ByteNetRemote = obj
+                ByteNetPath = obj:GetFullName()
+                print("[OUTCOME] OneTap ByteNet Remote:", ByteNetPath)
+                break
             end
         end
-    end
+        if not ByteNetRemote then
+            for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+                if obj:IsA("RemoteEvent") then
+                    -- ByteNet often has many connections, check
+                    local n = obj.Name:lower()
+                    if n:find("reliable") or n:find("unreliable") or n:find("packet") then
+                        ByteNetRemote = obj
+                        ByteNetPath = obj:GetFullName()
+                        print("[OUTCOME] OneTap ByteNet-like Remote:", ByteNetPath)
+                        break
+                    end
+                end
+            end
+        end
+    end)
+    print("[OUTCOME] OneTap WeaponPackets:", WeaponPackets and ("found at " .. (WeaponPacketsPath or "unknown")) or "NOT FOUND - will use hookmetamethod fallback")
+    print("[OUTCOME] OneTap ByteNetRemote:", ByteNetRemote and ByteNetPath or "NOT FOUND")
 
     local OT = {
         -- Aimbot modes: SilentAim hooks packets (invisible), CameraAim moves mouse/camera
@@ -4445,40 +4496,71 @@ function require_OneTap()
         return BestTarget, BestPart
     end
 
-    -- Silent Aim hook (based on working reference: WeaponPackets.useWeapon.send)
+    -- Silent Aim hook - dual path: WeaponPackets packet hook OR hookmetamethod FireServer fallback
     local OriginalSend = nil
     local SilentHooked = false
+    local HookedRemote = nil
     local function EnsureSilentHook()
         if SilentHooked then return true end
-        if not WeaponPackets or not WeaponPackets.useWeapon or not WeaponPackets.useWeapon.send then
-            print("[OUTCOME] OneTap SilentAim: WeaponPackets not found, cannot hook")
-            return false
-        end
-        OriginalSend = WeaponPackets.useWeapon.send
-        WeaponPackets.useWeapon.send = function(Data)
-            if OT.SilentAim and Data and Data.origin then
-                -- roll hit chance
-                local roll = OT.SilentHitChance >= 100 or math.random(1,100) <= OT.SilentHitChance
-                if roll then
-                    local TargetChar, TargetPart = GetNearestTarget(OT.SilentFOV, OT.SilentTarget)
-                    if TargetChar and TargetPart then
-                        Data.hitResult = TargetChar
-                        Data.hitPart = TargetPart
-                        Data.position = TargetPart.Position
-                        pcall(function() Data.direction = (TargetPart.Position - Data.origin).Unit end)
+        -- Path 1: direct WeaponPackets table hook (best)
+        if WeaponPackets and WeaponPackets.useWeapon and WeaponPackets.useWeapon.send then
+            OriginalSend = WeaponPackets.useWeapon.send
+            WeaponPackets.useWeapon.send = function(Data)
+                if OT.SilentAim and Data and Data.origin then
+                    local roll = OT.SilentHitChance >= 100 or math.random(1,100) <= OT.SilentHitChance
+                    if roll then
+                        local TargetChar, TargetPart = GetNearestTarget(OT.SilentFOV, OT.SilentTarget)
+                        if TargetChar and TargetPart then
+                            Data.hitResult = TargetChar
+                            Data.hitPart = TargetPart
+                            Data.position = TargetPart.Position
+                            pcall(function() Data.direction = (TargetPart.Position - Data.origin).Unit end)
+                            print("[OUTCOME] SilentAim packet redirect to", TargetChar.Name, TargetPart.Name)
+                        end
                     end
                 end
+                return OriginalSend(Data)
             end
-            return OriginalSend(Data)
+            SilentHooked = true
+            HookedRemote = "WeaponPackets"
+            print("[OUTCOME] OneTap SilentAim hooked via WeaponPackets, FOV=" .. OT.SilentFOV)
+            return true
         end
-        SilentHooked = true
-        print("[OUTCOME] OneTap SilentAim hooked, FOV=" .. OT.SilentFOV)
-        return true
+        -- Path 2: hookmetamethod FireServer on ByteNet remote (Xeno fallback)
+        if hookmetamethod and ByteNetRemote then
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod and getnamecallmethod() or ""
+                if method == "FireServer" and self == ByteNetRemote and OT.SilentAim then
+                    -- ByteNet packets are buffered, we can't easily parse here, but log
+                    -- For now, fallback to not blocking, let camera aim handle
+                end
+                return oldNamecall(self, ...)
+            end)
+            SilentHooked = true
+            HookedRemote = ByteNetRemote and ByteNetPath or "hookmetamethod"
+            print("[OUTCOME] OneTap SilentAim hookmetamethod installed on", HookedRemote, "- using CAMERA AIM as fallback (packets blocked, camera will snap)")
+            -- Enable camera aim automatically as fallback when silent packets unavailable
+            if not OT.CameraAim then
+                OT.CameraAim = true
+                task.spawn(function() pcall(CameraAimLoop) end)
+                Rayfield:Notify({Title="SilentAim Fallback", Content="Packets blocked on Xeno - Camera Aim enabled. Use Right Mouse to aim.", Duration=4})
+            end
+            return true
+        end
+        print("[OUTCOME] OneTap SilentAim: WeaponPackets not found and no ByteNet remote, cannot hook - CAMERA AIM ONLY")
+        -- auto-enable camera aim so user has something
+        if not OT.CameraAim then
+            OT.CameraAim = true
+            task.spawn(function() pcall(CameraAimLoop) end)
+            Rayfield:Notify({Title="Camera Aim Enabled", Content="Silent packets blocked - using Camera Aim (hold Right Mouse)", Duration=4})
+        end
+        return false
     end
 
     local function DisableSilentHook()
         if SilentHooked and OriginalSend and WeaponPackets and WeaponPackets.useWeapon then
-            WeaponPackets.useWeapon.send = OriginalSend
+            pcall(function() WeaponPackets.useWeapon.send = OriginalSend end)
             SilentHooked = false
             print("[OUTCOME] OneTap SilentAim unhooked")
         end
