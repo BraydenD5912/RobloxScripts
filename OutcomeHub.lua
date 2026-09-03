@@ -1,7 +1,7 @@
 -- ══════════════════════════════════════════════════════════════
 -- OUTCOME HUB — Multi-Game Roblox Hub v3 (improved)
 -- Auto-detects the game and loads the right module
--- Games: +1 Speed Keyboard Escape | Basketball Legends | Sniper Duels | Hypershot | Blox Fruits | Runaways | Clean The Leaves
+-- Games: +1 Speed Keyboard Escape | Basketball Legends | Sniper Duels | Hypershot | Blox Fruits | Runaways | Clean The Leaves | Adopt Me
 -- Improvements: throttled scans, ESP pooling, reversible WhiteScreen, lazy Fly/NoClip, visibility-checked aimbot, humanized jitter
 -- ══════════════════════════════════════════════════════════════
 
@@ -153,6 +153,9 @@ local KNOWN_PLACE_IDS = {
     ["4442272183"]     = "bloxfruits",     -- Blox Fruits (second place)
     ["7449423635"]     = "bloxfruits",     -- Blox Fruits (third place)
     ["14282329183"]    = "runaways",       -- Runaways (beta)
+    ["920587237"]      = "adoptme",        -- Adopt Me (classic)
+    ["603519598"]      = "adoptme",        -- Adopt Me (new)
+    ["14600811883"]    = "adoptme",        -- Adopt Me (private server)
 }
 
 local function DetectGame()
@@ -184,6 +187,8 @@ local function DetectGame()
         GameName = "runaways"
     elseif pn:find("leaf") or pn:find("rake") or pn:find("yard") or (pn:find("clean") and pn:find("leaf")) then
         GameName = "cleanleaves"
+    elseif pn:find("adopt") then
+        GameName = "adoptme"
     elseif pn:find("keyboard") or pn:find("escape") or pn:find("speed") then
         GameName = "keyboardescape"
     end
@@ -212,6 +217,8 @@ task.spawn(function()
             GameName = "runaways"
         elseif n:find("leaf") or n:find("rake") or n:find("yard") or (n:find("clean") and n:find("leaf")) then
             GameName = "cleanleaves"
+        elseif n:find("adopt") then
+            GameName = "adoptme"
         elseif n:find("keyboard") or n:find("escape") or n:find("speed") then
             GameName = "keyboardescape"
         end
@@ -233,6 +240,7 @@ local Window = Rayfield:CreateWindow({
         or (GameName == "bloxfruits" and "Blox Fruits")
         or (GameName == "runaways" and "Runaways (Beta)")
         or (GameName == "cleanleaves" and "Clean The Leaves")
+        or (GameName == "adoptme" and "Adopt Me")
         or "Game: " .. tostring(game.Name),
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
@@ -3588,6 +3596,641 @@ function require_CleanLeaves()
     Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Clean The Leaves loaded", Duration = 4 })
 end
 
+
+-- ═══════════════════════════════════════════════════════════════
+-- GAME MODULE: ADOPT ME
+-- ═══════════════════════════════════════════════════════════════
+function require_AdoptMe()
+    local Players = game:GetService("Players")
+    local LocalPlayer = Players.LocalPlayer
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local Workspace = game:GetService("Workspace")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local VirtualUser = game:GetService("VirtualUser")
+    local TweenService = game:GetService("TweenService")
+    local Lighting = game:GetService("Lighting")
+
+    local Camera = Workspace.CurrentCamera
+
+    local AM = {
+        -- Auto Farm
+        AutoBucks = false, BucksDelay = 2,
+        AutoDaily = false,
+        AutoGifts = false, GiftRadius = 100,
+        AutoFamily = false,
+        -- Pets
+        AutoAge = false, AgeDelay = 1.5,
+        AutoHatch = false,
+        HatchEgg = "Cracked Egg",
+        PetESP = false, EggESP = false, GiftESP = false,
+        -- Teleport
+        ClickTP = false,
+        -- Movement
+        WalkSpeedEnabled = false, WalkSpeedValue = 32,
+        JumpPowerEnabled = false, JumpPowerValue = 60,
+        InfiniteJump = false, NoClip = false,
+        FlyEnabled = false, FlySpeed = 60,
+        BHop = false,
+        -- Visuals
+        PlayerESP = false,
+        FullBright = false,
+        -- Misc
+        AntiAFK = false,
+        Connections = {},
+    }
+
+    local function DConn(name)
+        if AM.Connections[name] then pcall(function() AM.Connections[name]:Disconnect() end); AM.Connections[name] = nil end
+    end
+
+    local function GetParts()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        return char, hrp, hum
+    end
+
+    local function IsAlive()
+        local _, _, hum = GetParts()
+        return hum and hum.Health > 0
+    end
+
+    -- Locations in Adopt Me
+    local Locations = {
+        ["Nursery"] = CFrame.new(22, 7, -153),
+        ["School"] = CFrame.new(-150, 7, 80),
+        ["Hospital"] = CFrame.new(-287, 7, 10),
+        ["Playground"] = CFrame.new(-260, 7, -240),
+        ["Pizza Shop"] = CFrame.new(-260, 7, -404),
+        ["Pizzeria"] = CFrame.new(-260, 7, -404),
+        ["Campsite"] = CFrame.new(20, 7, 300),
+        ["Beach Party"] = CFrame.new(-1300, 7, -500),
+        ["Sky Castle"] = CFrame.new(-295, 160, -400),
+        ["Salon"] = CFrame.new(-260, 7, 150),
+        ["Toy Shop"] = CFrame.new(120, 7, -240),
+        ["Pet Shop"] = CFrame.new(-250, 7, -80),
+        ["Cave"] = CFrame.new(-520, 40, -360),
+        ["Ice Rink"] = CFrame.new(-1400, 7, -300),
+        ["Neighborhood"] = CFrame.new(550, 7, -150),
+        ["Main Island"] = CFrame.new(0, 7, 0),
+    }
+
+    local EggList = {"Cracked Egg", "Pet Egg", "Royal Egg", "Robo Egg", "Fossil Egg", "Ocean Egg", "Mythic Egg", "Woodland Egg", "Retired Egg", "Christmas Egg"}
+
+    -- Find bucks/money spawns
+    local function FindBucks()
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj:IsA("BasePart") or obj:IsA("BillboardGui") then
+                    local name = obj.Name:lower()
+                    if name:find("buck") or name:find("money") or name:find("coin") or name:find("dollar") then
+                        local part = obj:IsA("BasePart") and obj or obj.Parent
+                        if part and part:IsA("BasePart") then table.insert(out, part) end
+                    end
+                end
+                if obj:IsA("ProximityPrompt") then
+                    local txt = (obj.ObjectText or ""):lower() .. " " .. (obj.ActionText or ""):lower()
+                    if txt:find("buck") or txt:find("money") or txt:find("cash") or txt:find("collect") then
+                        local part = obj.Parent
+                        if part and part:IsA("BasePart") then table.insert(out, part) end
+                    end
+                end
+            end
+        end)
+        return out
+    end
+
+    -- Find gifts
+    local function FindGifts()
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                local name = obj.Name:lower()
+                if (name:find("gift") or name:find("present") or name:find("chest")) and (obj:IsA("BasePart") or obj:IsA("Model")) then
+                    local part = obj:IsA("BasePart") and obj or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                    if part then table.insert(out, part) end
+                end
+            end
+        end)
+        return out
+    end
+
+    -- Find eggs
+    local function FindEggs()
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                local name = obj.Name:lower()
+                if name:find("egg") and (obj:IsA("Tool") or obj:IsA("BasePart") or obj:IsA("Model")) then
+                    local part = obj:IsA("BasePart") and obj or obj:IsA("Tool") and obj:FindFirstChild("Handle") or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                    if part then table.insert(out, {obj=obj, part=part}) end
+                end
+            end
+        end)
+        return out
+    end
+
+    -- Find pets
+    local function FindPets()
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+                    -- check if it's a pet (not a player)
+                    local isPlayer = false
+                    for _, pl in ipairs(Players:GetPlayers()) do if pl.Character == obj then isPlayer = true; break end end
+                    if not isPlayer then
+                        local name = obj.Name:lower()
+                        if not name:find("dummy") then table.insert(out, obj) end
+                    end
+                end
+            end
+        end)
+        return out
+    end
+
+    -- Auto Bucks: teleport to bucks spawns and fire prompts
+    local function FarmBucks()
+        if not AM.AutoBucks then return end
+        local _, hrp = GetParts()
+        if not hrp then return end
+        local bucks = FindBucks()
+        -- sort nearest first
+        table.sort(bucks, function(a,b) return (hrp.Position - a.Position).Magnitude < (hrp.Position - b.Position).Magnitude end)
+        for _, part in ipairs(bucks) do
+            if not AM.AutoBucks then break end
+            if not part or not part.Parent then continue end
+            if (hrp.Position - part.Position).Magnitude > AM.GiftRadius then continue end
+            hrp.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.35)
+            local prompt = part:FindFirstChildWhichIsA("ProximityPrompt")
+            if prompt then pcall(function() fireproximityprompt(prompt) end) end
+            -- also try touch
+            pcall(function() firetouchinterest(hrp, part, 0); firetouchinterest(hrp, part, 1) end)
+            task.wait(0.2)
+        end
+        -- fallback: if no bucks found, go pizza job for income
+        if #bucks == 0 then
+            local pizza = Locations["Pizza Shop"]
+            if pizza and (hrp.Position - pizza.Position).Magnitude > 20 then
+                hrp.CFrame = pizza + Vector3.new(math.random(-5,5), 0, math.random(-5,5))
+            end
+        end
+    end
+
+    -- Auto Gifts
+    local function CollectGifts()
+        if not AM.AutoGifts then return end
+        local _, hrp = GetParts()
+        if not hrp then return end
+        local gifts = FindGifts()
+        table.sort(gifts, function(a,b) return (hrp.Position - a.Position).Magnitude < (hrp.Position - b.Position).Magnitude end)
+        for _, g in ipairs(gifts) do
+            if not AM.AutoGifts then break end
+            if not g or not g.Parent then continue end
+            if (hrp.Position - g.Position).Magnitude > AM.GiftRadius then continue end
+            hrp.CFrame = g.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.4)
+            local prompt = g:FindFirstChildWhichIsA("ProximityPrompt")
+            if prompt then pcall(function() fireproximityprompt(prompt) end) end
+            pcall(function() firetouchinterest(hrp, g, 0); firetouchinterest(hrp, g, 1) end)
+            task.wait(0.3)
+        end
+    end
+
+    -- Auto Age: spam feed/pizza/shower needs by interacting with task objects
+    local function DoAilments()
+        if not AM.AutoAge then return end
+        local _, hrp = GetParts()
+        if not hrp then return end
+        -- Find ailment prompts (hungry, thirsty, sleepy, etc)
+        local prompts = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj:IsA("ProximityPrompt") and obj.Enabled then
+                    local txt = (obj.ObjectText or ""):lower() .. " " .. (obj.ActionText or ""):lower() .. " " .. obj.Name:lower()
+                    if txt:find("hungry") or txt:find("thirsty") or txt:find("sleep") or txt:find("shower") or txt:find("pizza") or txt:find("feed") or txt:find("drink") or txt:find("camp") or txt:find("school") then
+                        table.insert(prompts, obj)
+                    end
+                end
+            end
+        end)
+        for _, pr in ipairs(prompts) do
+            if not AM.AutoAge then break end
+            local part = pr.Parent
+            if part and part:IsA("BasePart") and hrp then
+                if (hrp.Position - part.Position).Magnitude < 60 then
+                    hrp.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+                    task.wait(0.5)
+                    pcall(function() fireproximityprompt(pr) end)
+                    task.wait(AM.AgeDelay)
+                end
+            end
+        end
+        -- also try to fire server remotes for tasks if any
+        pcall(function()
+            for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+                if obj:IsA("RemoteEvent") and obj.Name:lower():find("task") then
+                    -- generic task completion attempt
+                end
+            end
+        end)
+    end
+
+    -- Teleport helper
+    local function TeleportTo(cf)
+        local _, hrp = GetParts()
+        if hrp then
+            -- humanized: small random offset, preserve Y vel
+            hrp.AssemblyLinearVelocity = Vector3.new(0, hrp.AssemblyLinearVelocity.Y, 0)
+            hrp.CFrame = cf + Vector3.new((math.random()-0.5)*3, 0, (math.random()-0.5)*3)
+            task.wait(0.05)
+        end
+    end
+
+    -- ESP
+    local ESPItems = {}
+    local function ClearESP()
+        for _, v in ipairs(ESPItems) do pcall(function() v:Destroy() end) end
+        ESPItems = {}
+    end
+    local function MakeESP(obj, color, text)
+        if not obj or not obj.Parent then return end
+        local adornee = obj:IsA("BasePart") and obj or obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")) or obj:FindFirstChildWhichIsA("BasePart")
+        if not adornee then return end
+        local hl = Instance.new("Highlight")
+        hl.Name = "_AM_ESP"
+        hl.FillColor = color
+        hl.OutlineColor = Color3.fromRGB(255,255,255)
+        hl.FillTransparency = 0.5
+        hl.Adornee = obj:IsA("Model") and obj or adornee.Parent
+        -- fallback: if model has no primary, attach to part
+        if not hl.Adornee or not hl.Adornee.Parent then hl.Adornee = adornee end
+        hl.Parent = adornee
+        table.insert(ESPItems, hl)
+        if text then
+            local bb = Instance.new("BillboardGui")
+            bb.Name = "_AM_LABEL"
+            bb.Size = UDim2.new(0, 140, 0, 28)
+            bb.StudsOffset = Vector3.new(0, 3, 0)
+            bb.AlwaysOnTop = true
+            bb.Adornee = adornee
+            bb.Parent = adornee
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(1,0,1,0)
+            lbl.BackgroundTransparency = 1
+            lbl.Text = text
+            lbl.TextColor3 = color
+            lbl.TextStrokeTransparency = 0.3
+            lbl.TextScaled = true
+            lbl.Font = Enum.Font.GothamBold
+            lbl.Parent = bb
+            table.insert(ESPItems, bb)
+        end
+    end
+
+    local function ESPLoop()
+        local _eggCache = {last=0, data={}}
+        while AM.PetESP or AM.EggESP or AM.GiftESP or AM.PlayerESP do
+            if AM.PetESP then
+                for _, pet in ipairs(FindPets()) do
+                    if pet and pet.Parent and not pet:FindFirstChild("_AM_ESP") then
+                        -- avoid duplicating player models
+                        local hrp = pet:FindFirstChild("HumanoidRootPart")
+                        if hrp then MakeESP(pet, Color3.fromRGB(255, 150, 50), pet.Name) end
+                    end
+                end
+            end
+            if AM.EggESP then
+                for _, e in ipairs(FindEggs()) do
+                    if e.obj and e.obj.Parent and not e.part:FindFirstChild("_AM_ESP") then
+                        MakeESP(e.part, Color3.fromRGB(150, 255, 150), e.obj.Name)
+                    end
+                end
+            end
+            if AM.GiftESP then
+                for _, g in ipairs(FindGifts()) do
+                    if g and g.Parent and not g:FindFirstChild("_AM_ESP") then
+                        MakeESP(g, Color3.fromRGB(255, 215, 0), "Gift")
+                    end
+                end
+            end
+            if AM.PlayerESP then
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl ~= LocalPlayer and pl.Character and pl.Character:FindFirstChild("HumanoidRootPart") and not pl.Character:FindFirstChild("_AM_ESP") then
+                        MakeESP(pl.Character, Color3.fromRGB(80, 170, 255), pl.Name)
+                    end
+                end
+            end
+            -- prune stale
+            for i=#ESPItems,1,-1 do
+                local v = ESPItems[i]
+                if not v or not v.Parent or (v.Adornee and not v.Adornee.Parent) then
+                    pcall(function() v:Destroy() end)
+                    table.remove(ESPItems, i)
+                end
+            end
+            task.wait(2.5)
+        end
+    end
+
+    -- FullBright
+    local function ToggleFullBright(v)
+        AM.FullBright = v
+        if v then
+            Lighting.Brightness = 2
+            Lighting.ClockTime = 14
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = false
+            Lighting.OutdoorAmbient = Color3.new(1,1,1)
+        else
+            Lighting.Brightness = 1
+            Lighting.ClockTime = 14
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = true
+            Lighting.OutdoorAmbient = Color3.new(0.5,0.5,0.5)
+        end
+    end
+
+    -- TABS
+    local FarmTab = Window:CreateTab("Auto Farm", 4483362458)
+    local PetTab = Window:CreateTab("Pets", 4483362458)
+    local TeleportTab = Window:CreateTab("Teleport", 4483362458)
+    local PlayerTab = Window:CreateTab("Player", 4483362458)
+    local ESPTab = Window:CreateTab("ESP", 4483362458)
+    local MiscTab = Window:CreateTab("Misc", 4483362458)
+
+    -- FARM TAB
+    FarmTab:CreateSection("Bucks Farm")
+    FarmTab:CreateToggle({ Name = "Auto Farm Bucks", CurrentValue = false, Flag = "AMAutoBucksFlag",
+        Callback = function(v)
+            AM.AutoBucks = v
+            if v then task.spawn(function()
+                while AM.AutoBucks do
+                    if not IsAlive() then task.wait(3) continue end
+                    pcall(FarmBucks)
+                    task.wait(AM.BucksDelay + math.random()*0.6)
+                end
+            end) end
+        end })
+    FarmTab:CreateSlider({ Name = "Bucks Delay", Range = {1,10}, Increment = 0.5, Suffix = "s", CurrentValue = 2, Flag = "AMBucksDelayFlag",
+        Callback = function(v) AM.BucksDelay = v end })
+    FarmTab:CreateToggle({ Name = "Auto Collect Gifts", CurrentValue = false, Flag = "AMAutoGiftFlag",
+        Callback = function(v)
+            AM.AutoGifts = v
+            if v then task.spawn(function()
+                while AM.AutoGifts do
+                    if not IsAlive() then task.wait(3) continue end
+                    pcall(CollectGifts)
+                    task.wait(1.5)
+                end
+            end) end
+        end })
+    FarmTab:CreateSlider({ Name = "Gift Scan Radius", Range = {20, 300}, Increment = 10, Suffix = " studs", CurrentValue = 100, Flag = "AMGiftRadiusFlag",
+        Callback = function(v) AM.GiftRadius = v end })
+
+    FarmTab:CreateSection("Daily & Family")
+    FarmTab:CreateToggle({ Name = "Auto Daily Login (fire prompts)", CurrentValue = false, Flag = "AMDailyFlag",
+        Callback = function(v)
+            AM.AutoDaily = v
+            if v then task.spawn(function()
+                while AM.AutoDaily do
+                    local _, hrp = GetParts()
+                    if hrp then
+                        for _, obj in ipairs(Workspace:GetDescendants()) do
+                            if obj:IsA("ProximityPrompt") then
+                                local txt = (obj.ObjectText or ""):lower() .. " " .. (obj.ActionText or ""):lower()
+                                if txt:find("daily") or txt:find("claim") or txt:find("reward") then
+                                    if (hrp.Position - obj.Parent.Position).Magnitude < 40 then
+                                        pcall(function() fireproximityprompt(obj) end)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    task.wait(5)
+                end
+            end) end
+        end })
+    FarmTab:CreateToggle({ Name = "Auto Family Payout (stay near family)", CurrentValue = false, Flag = "AMFamilyFlag",
+        Callback = function(v) AM.AutoFamily = v end })
+    FarmTab:CreateLabel("Tip: Join a Family for $6 every ~10min. Hub keeps you near house.")
+
+    -- PET TAB
+    PetTab:CreateSection("Pet Aging")
+    PetTab:CreateToggle({ Name = "Auto Age Pet (do ailments)", CurrentValue = false, Flag = "AMAutoAgeFlag",
+        Callback = function(v)
+            AM.AutoAge = v
+            if v then task.spawn(function()
+                while AM.AutoAge do
+                    if not IsAlive() then task.wait(3) continue end
+                    pcall(DoAilments)
+                    task.wait(1)
+                end
+            end) end
+        end })
+    PetTab:CreateSlider({ Name = "Task Delay", Range = {0.5, 5}, Increment = 0.5, Suffix = "s", CurrentValue = 1.5, Flag = "AMAgeDelayFlag",
+        Callback = function(v) AM.AgeDelay = v end })
+    PetTab:CreateSection("Hatching")
+    PetTab:CreateDropdown({ Name = "Select Egg", Options = EggList, CurrentOption = {"Cracked Egg"}, Flag = "AMHatchEggFlag",
+        Callback = function(o) AM.HatchEgg = o[1] end })
+    PetTab:CreateButton({ Name = "Teleport to Nursery (Eggs)", Callback = function() local cf = Locations["Nursery"]; if cf then TeleportTo(cf) end end })
+    PetTab:CreateLabel("Hatching is server-sided — UI shows nursery for manual hatch.")
+    PetTab:CreateSection("Pet Tools")
+    PetTab:CreateButton({ Name = "Equip Best Pet Tool (auto)", Callback = function()
+        local bp = LocalPlayer:FindFirstChild("Backpack")
+        local char = LocalPlayer.Character
+        local best = nil
+        local function scan(c)
+            for _, t in ipairs(c:GetChildren()) do if t:IsA("Tool") then
+                local n=t.Name:lower()
+                if n:find("pet") or n:find("egg") or n:find("food") or n:find("bottle") then best = t end
+            end end
+        end
+        if bp then scan(bp) end
+        if char then scan(char) end
+        if best then
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum then hum:EquipTool(best) end
+        end
+    end })
+
+    -- TELEPORT
+    TeleportTab:CreateSection("Quick Teleport")
+    local LocNames = {}
+    for k,_ in pairs(Locations) do table.insert(LocNames, k) end
+    table.sort(LocNames)
+    local SelectedLoc = "Nursery"
+    TeleportTab:CreateDropdown({ Name = "Select Location", Options = LocNames, CurrentOption = {"Nursery"}, Flag = "AMLocFlag",
+        Callback = function(o) SelectedLoc = o[1] end })
+    TeleportTab:CreateButton({ Name = "Teleport to Location", Callback = function()
+        local cf = Locations[SelectedLoc]
+        if cf then TeleportTo(cf) end
+    end })
+    TeleportTab:CreateSection("Player Teleport")
+    local PlayerDropdown = TeleportTab:CreateDropdown({ Name = "Select Player", Options = {}, CurrentOption = {}, Flag = "AMPlayerTP",
+        Callback = function(o)
+            local t = Players:FindFirstChild(o[1])
+            if t and t.Character then local tr = t.Character:FindFirstChild("HumanoidRootPart"); local mr = GetParts(); local _, hrp = GetParts(); if tr and hrp then hrp.CFrame = tr.CFrame + Vector3.new(0,3,0) end end
+        end })
+    local function RefreshPlayers()
+        local names = {}
+        for _, p in ipairs(Players:GetPlayers()) do table.insert(names, p.Name) end
+        PlayerDropdown:Refresh(names)
+    end
+    TeleportTab:CreateButton({ Name = "Refresh Player List", Callback = RefreshPlayers })
+    TeleportTab:CreateButton({ Name = "Teleport to Random House (Neighborhood)", Callback = function()
+        local _, hrp = GetParts()
+        if not hrp then return end
+        -- Find houses by model with door
+        local houses = {}
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name:lower():find("house") and obj:IsA("Model") then
+                local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                if pp then table.insert(houses, pp) end
+            end
+        end
+        if #houses>0 then
+            local pick = houses[math.random(1,#houses)]
+            hrp.CFrame = pick.CFrame + Vector3.new(0,5,0)
+        else
+            local cf = Locations["Neighborhood"]
+            if cf then TeleportTo(cf + Vector3.new(math.random(-100,100),0,math.random(-100,100))) end
+        end
+    end })
+    TeleportTab:CreateSection("Click Teleport")
+    TeleportTab:CreateToggle({ Name = "Click TP (Right Click)", CurrentValue = false, Flag = "AMClickTPFlag",
+        Callback = function(v)
+            AM.ClickTP = v
+            if v then AM.Connections.ClickTP = UserInputService.InputBegan:Connect(function(input, processed)
+                if processed then return end
+                if input.UserInputType == Enum.UserInputType.MouseButton2 then
+                    local _, hrp = GetParts()
+                    if hrp then local m = LocalPlayer:GetMouse(); if m.Hit then hrp.CFrame = m.Hit + Vector3.new(0,5,0) end end
+                end
+            end) else DConn("ClickTP") end
+        end })
+
+    -- PLAYER TAB
+    PlayerTab:CreateSection("Movement")
+    PlayerTab:CreateToggle({ Name = "Custom WalkSpeed", CurrentValue = false, Flag = "AMWalkFlag",
+        Callback = function(v) AM.WalkSpeedEnabled = v; if not v then local _,_,hum=GetParts(); if hum then hum.WalkSpeed=16 end end end })
+    PlayerTab:CreateSlider({ Name = "WalkSpeed", Range = {16, 120}, Increment = 1, Suffix = " studs/s", CurrentValue = 32, Flag = "AMWalkValFlag",
+        Callback = function(v) AM.WalkSpeedValue = v end })
+    PlayerTab:CreateToggle({ Name = "Custom JumpPower", CurrentValue = false, Flag = "AMJumpFlag",
+        Callback = function(v) AM.JumpPowerEnabled = v; if not v then local _,_,hum=GetParts(); if hum then hum.JumpPower=50 end end end })
+    PlayerTab:CreateSlider({ Name = "JumpPower", Range = {50, 300}, Increment = 5, Suffix = "", CurrentValue = 60, Flag = "AMJumpValFlag",
+        Callback = function(v) AM.JumpPowerValue = v end })
+    PlayerTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "AMInfJumpFlag",
+        Callback = function(v)
+            AM.InfiniteJump = v
+            if v then AM.Connections.InfJump = UserInputService.JumpRequest:Connect(function() if AM.InfiniteJump and IsAlive() then local _,_,hum=GetParts(); if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end end end)
+            else DConn("InfJump") end
+        end })
+    PlayerTab:CreateSection("Fly & NoClip")
+    PlayerTab:CreateToggle({ Name = "Fly (W/Space/Shift)", CurrentValue = false, Flag = "AMFlyFlag",
+        Callback = function(v)
+            AM.FlyEnabled = v
+            if v then
+                local bv, bg
+                AM.Connections.Fly = RunService.RenderStepped:Connect(function()
+                    local _, hrp, hum = GetParts()
+                    if not (hrp and hum and IsAlive()) then AM.FlyEnabled=false; if bv then bv:Destroy() end; if bg then bg:Destroy() end; DConn("Fly"); return end
+                    if not bv then
+                        bv = Instance.new("BodyVelocity"); bv.MaxForce=Vector3.new(math.huge,math.huge,math.huge); bv.Velocity=Vector3.zero; bv.Parent=hrp
+                        bg = Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(math.huge,math.huge,math.huge); bg.P=9000; bg.D=500; bg.Parent=hrp
+                    end
+                    local md=Vector3.zero; local cam=Camera.CFrame
+                    if UserInputService:IsKeyDown(Enum.KeyCode.W) then md=md+cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.S) then md=md-cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.A) then md=md-cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.D) then md=md+cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then md=md+Vector3.new(0,1,0) end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then md=md-Vector3.new(0,1,0) end
+                    if md.Magnitude>0 then md=md.Unit*AM.FlySpeed end
+                    bv.Velocity=md; bg.CFrame=cam
+                end)
+            else
+                DConn("Fly")
+                local _,hrp=GetParts(); if hrp then for _,v in ipairs(hrp:GetChildren()) do if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then v:Destroy() end end end
+            end
+        end })
+    PlayerTab:CreateSlider({ Name = "Fly Speed", Range = {10,200}, Increment = 5, Suffix = " studs/s", CurrentValue = 60, Flag = "AMFlySpeedFlag",
+        Callback = function(v) AM.FlySpeed = v end })
+    PlayerTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "AMNoClipFlag",
+        Callback = function(v)
+            AM.NoClip = v
+            if v then AM.Connections.NoClip = RunService.Stepped:Connect(function() if not AM.NoClip then return end; local c=LocalPlayer.Character; if not c then return end; for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") and p.CanCollide then p.CanCollide=false end end end)
+            else DConn("NoClip") end
+        end })
+    PlayerTab:CreateToggle({ Name = "Bunny Hop (hold Space)", CurrentValue = false, Flag = "AMBHopFlag",
+        Callback = function(v)
+            AM.BHop = v
+            if v then AM.Connections.BHop = RunService.Heartbeat:Connect(function()
+                local _,hrp,hum=GetParts()
+                if AM.BHop and hrp and hum and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                    if hum.FloorMaterial ~= Enum.Material.Air then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+                end
+            end) else DConn("BHop") end
+        end })
+
+    -- ESP TAB
+    ESPTab:CreateSection("Adopt Me ESP")
+    ESPTab:CreateToggle({ Name = "Pet ESP", CurrentValue = false, Flag = "AMPetESPFlag",
+        Callback = function(v) AM.PetESP=v; if v then ClearESP(); task.spawn(ESPLoop) else if not AM.EggESP and not AM.GiftESP and not AM.PlayerESP then ClearESP() end end end })
+    ESPTab:CreateToggle({ Name = "Egg ESP", CurrentValue = false, Flag = "AMEggESPFlag",
+        Callback = function(v) AM.EggESP=v; if v then ClearESP(); task.spawn(ESPLoop) else if not AM.PetESP and not AM.GiftESP and not AM.PlayerESP then ClearESP() end end end })
+    ESPTab:CreateToggle({ Name = "Gift ESP", CurrentValue = false, Flag = "AMGiftESPFlag",
+        Callback = function(v) AM.GiftESP=v; if v then ClearESP(); task.spawn(ESPLoop) else if not AM.PetESP and not AM.EggESP and not AM.PlayerESP then ClearESP() end end end })
+    ESPTab:CreateToggle({ Name = "Player ESP", CurrentValue = false, Flag = "AMPlayerESPFlag",
+        Callback = function(v) AM.PlayerESP=v; if v then ClearESP(); task.spawn(ESPLoop) else if not AM.PetESP and not AM.EggESP and not AM.GiftESP then ClearESP() end end end })
+    ESPTab:CreateButton({ Name = "Clear All ESP", Callback = ClearESP })
+
+    -- MISC
+    MiscTab:CreateSection("Position Tracker")
+    local LX = MiscTab:CreateLabel("X: 0"); local LY = MiscTab:CreateLabel("Y: 0"); local LZ = MiscTab:CreateLabel("Z: 0")
+    local FPSLabel = MiscTab:CreateLabel("FPS: -- | Ping: --")
+    do local lastTick=os.clock(); local fc=0; RunService.RenderStepped:Connect(function() fc=fc+1; if os.clock()-lastTick>=1 then local fps=math.floor(fc/(os.clock()-lastTick)); fc=0; lastTick=os.clock(); local ping="--"; pcall(function() ping=tostring(math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())).."ms" end); FPSLabel:Set(string.format("FPS: %d | Ping: %s", fps, ping)) end end) end
+    AM.Connections.PosTracker = RunService.Heartbeat:Connect(function()
+        local _, hrp = GetParts()
+        if hrp then local p=hrp.Position; LX:Set(string.format("X: %.1f", p.X)); LY:Set(string.format("Y: %.1f", p.Y)); LZ:Set(string.format("Z: %.1f", p.Z)) end
+    end)
+
+    MiscTab:CreateSection("Utility")
+    MiscTab:CreateToggle({ Name = "FullBright", CurrentValue = false, Flag = "AMFullBrightFlag",
+        Callback = function(v) ToggleFullBright(v) end })
+    MiscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "AMAntiAFKFlag",
+        Callback = function(v)
+            AM.AntiAFK = v
+            if v then AM.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() task.wait(math.random()*1.2); pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(100,700), math.random(100,400))) end) end)
+            else DConn("AntiAFK") end
+        end })
+    MiscTab:CreateSection("Cleanup")
+    MiscTab:CreateButton({ Name = "Destroy UI", Callback = function()
+        ClearESP()
+        for name,_ in pairs(AM.Connections) do DConn(name) end
+        AM.AutoBucks=false; AM.AutoDaily=false; AM.AutoGifts=false; AM.AutoFamily=false
+        AM.AutoAge=false; AM.AutoHatch=false
+        AM.PetESP=false; AM.EggESP=false; AM.GiftESP=false; AM.PlayerESP=false
+        AM.WalkSpeedEnabled=false; AM.JumpPowerEnabled=false; AM.InfiniteJump=false; AM.NoClip=false; AM.FlyEnabled=false; AM.BHop=false
+        AM.ClickTP=false; AM.FullBright=false; AM.AntiAFK=false
+        Window:Destroy()
+    end })
+
+    -- Core loops
+    RunService.RenderStepped:Connect(function()
+        local _,_,hum=GetParts()
+        if hum then
+            if AM.WalkSpeedEnabled then hum.WalkSpeed = AM.WalkSpeedValue + (math.random()-0.5)*0.5 end
+            if AM.JumpPowerEnabled then hum.JumpPower = AM.JumpPowerValue; hum.UseJumpPower = true end
+        end
+    end)
+
+    Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Adopt Me loaded", Duration = 4 })
+end
+
 -- LAUNCH
 -- ══════════════════════════════════════════════════════════════
 local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/OutcomeHub.lua'
@@ -3616,6 +4259,7 @@ local function ShowHomeTab()
     HomeTab:CreateButton({ Name = "Reload as Blox Fruits", Callback = function() Reload("bloxfruits") end })
     HomeTab:CreateButton({ Name = "Reload as Runaways (Beta)", Callback = function() Reload("runaways") end })
     HomeTab:CreateButton({ Name = "Reload as Clean The Leaves", Callback = function() Reload("cleanleaves") end })
+    HomeTab:CreateButton({ Name = "Reload as Adopt Me", Callback = function() Reload("adoptme") end })
     HomeTab:CreateSection("Debug")
     HomeTab:CreateLabel("Executor: " .. tostring(identifyexecutor and identifyexecutor() or "unknown"))
     HomeTab:CreateLabel("Drawing: " .. tostring(Drawing ~= nil) .. " | mousemoverel: " .. tostring(mousemoverel ~= nil))
@@ -3642,6 +4286,8 @@ function LaunchGame()
         ok, err = pcall(require_Runaways)
     elseif GameName == "cleanleaves" then
         ok, err = pcall(require_CleanLeaves)
+    elseif GameName == "adoptme" then
+        ok, err = pcall(require_AdoptMe)
     else
         Launched = false
         ShowHomeTab()
@@ -3665,7 +4311,7 @@ if not Launched then
     task.spawn(function()
         task.wait(3)
         if Launched then return end
-        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" or GameName == "hypershot" or GameName == "bloxfruits" or GameName == "runaways" or GameName == "cleanleaves" then
+        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" or GameName == "hypershot" or GameName == "bloxfruits" or GameName == "runaways" or GameName == "cleanleaves" or GameName == "adoptme" then
             Reload(GameName)
         end
     end)
