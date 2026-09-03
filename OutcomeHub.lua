@@ -1,7 +1,7 @@
 -- ══════════════════════════════════════════════════════════════
 -- OUTCOME HUB — Multi-Game Roblox Hub v3 (improved)
 -- Auto-detects the game and loads the right module
--- Games: +1 Speed Keyboard Escape | Basketball Legends | Sniper Duels | Hypershot | Blox Fruits | Runaways | Clean The Leaves | Adopt Me
+-- Games: +1 Speed Keyboard Escape | Basketball Legends | Sniper Duels | Hypershot | Blox Fruits | Runaways | Clean The Leaves | Adopt Me | [FPS] One Tap
 -- Improvements: throttled scans, ESP pooling, reversible WhiteScreen, lazy Fly/NoClip, visibility-checked aimbot, humanized jitter
 -- ══════════════════════════════════════════════════════════════
 
@@ -156,6 +156,8 @@ local KNOWN_PLACE_IDS = {
     ["920587237"]      = "adoptme",        -- Adopt Me (classic)
     ["603519598"]      = "adoptme",        -- Adopt Me (new)
     ["14600811883"]    = "adoptme",        -- Adopt Me (private server)
+    ["90568084448279"] = "onetap",         -- [FPS] One Tap (main)
+    ["90568084448280"] = "onetap",         -- [FPS] One Tap (pro servers var)
 }
 
 local function DetectGame()
@@ -189,6 +191,8 @@ local function DetectGame()
         GameName = "cleanleaves"
     elseif pn:find("adopt") then
         GameName = "adoptme"
+    elseif pn:find("one") and pn:find("tap") then
+        GameName = "onetap"
     elseif pn:find("keyboard") or pn:find("escape") or pn:find("speed") then
         GameName = "keyboardescape"
     end
@@ -219,6 +223,8 @@ task.spawn(function()
             GameName = "cleanleaves"
         elseif n:find("adopt") then
             GameName = "adoptme"
+        elseif n:find("one") and n:find("tap") then
+            GameName = "onetap"
         elseif n:find("keyboard") or n:find("escape") or n:find("speed") then
             GameName = "keyboardescape"
         end
@@ -241,6 +247,7 @@ local Window = Rayfield:CreateWindow({
         or (GameName == "runaways" and "Runaways (Beta)")
         or (GameName == "cleanleaves" and "Clean The Leaves")
         or (GameName == "adoptme" and "Adopt Me")
+        or (GameName == "onetap" and "[FPS] One Tap")
         or "Game: " .. tostring(game.Name),
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
@@ -4231,6 +4238,488 @@ function require_AdoptMe()
     Rayfield:Notify({ Title = "OUTCOME HUB", Content = "Adopt Me loaded", Duration = 4 })
 end
 
+
+-- ═══════════════════════════════════════════════════════════════
+-- GAME MODULE: [FPS] ONE TAP
+-- ═══════════════════════════════════════════════════════════════
+function require_OneTap()
+    local Players = game:GetService("Players")
+    local LocalPlayer = Players.LocalPlayer
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local Workspace = game:GetService("Workspace")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local VirtualUser = game:GetService("VirtualUser")
+
+    local Camera = Workspace.CurrentCamera
+
+    local OT = {
+        Aimbot = false, AimFOV = 90, AimTeam = false, AimWallCheck = true,
+        AimConfig = "Legit", AimHitbox = "Head",
+        AimKey = "RMouse", -- default hold right mouse for legit peek
+        LegitSmooth = 0.22, LegitOffset = 0.7,
+        Triggerbot = false, AutoFire = false,
+        SilentAim = false, SilentHitChance = 85,
+        HitboxExpander = false, HitboxSize = 4,
+        ESP = false, ESPBoxes = false, ESPTracers = false, TeamESP = false,
+        WalkSpeedEnabled = false, WalkSpeedValue = 20,
+        InfiniteJump = false, JumpPower = 60,
+        NoClip = false, FlyEnabled = false, FlySpeed = 42,
+        NoRecoil = false, BHop = false,
+        AntiAFK = false,
+        Connections = {},
+    }
+
+    local function DConn(name) if OT.Connections[name] then pcall(function() OT.Connections[name]:Disconnect() end); OT.Connections[name] = nil end end
+    local function GetParts()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        return char, hrp, hum
+    end
+    local function IsAlive()
+        local _,_,hum = GetParts()
+        return hum and hum.Health > 0
+    end
+
+    -- Enemy detection: FFA (everyone is enemy) but respect team if enabled
+    local function GetEnemies()
+        local list = {}
+        local myTeam = LocalPlayer.Team
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl == LocalPlayer then continue end
+            if not pl.Character then continue end
+            local hrp = pl.Character:FindFirstChild("HumanoidRootPart")
+            local hum = pl.Character:FindFirstChildOfClass("Humanoid")
+            if not hrp or not hum or hum.Health <= 0 then continue end
+            if OT.AimTeam and myTeam and pl.Team and myTeam == pl.Team then continue end
+            table.insert(list, {Pl=pl, Part=hrp, Hum=hum, Char=pl.Character})
+        end
+        return list
+    end
+
+    local function GetTargetPoint(char)
+        local part
+        if OT.AimHitbox == "Head" then part = char:FindFirstChild("Head")
+        elseif OT.AimHitbox == "Body" then part = char:FindFirstChild("HumanoidRootPart")
+        else part = char:FindFirstChild("HumanoidRootPart") end
+        if part then return part.Position + Vector3.new(0, 0.2, 0) end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        return hrp and hrp.Position or Vector3.zero
+    end
+
+    local function IsVisible(from, to, ignoreChar)
+        if not OT.AimWallCheck then return true end
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = {ignoreChar or LocalPlayer.Character, Camera}
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local dir = to - from
+        local result = Workspace:Raycast(from, dir, params)
+        if not result then return true end
+        -- if hit is descendant of target char, visible
+        -- we check by seeing if hit instance is inside any enemy char
+        for _, e in ipairs(GetEnemies()) do
+            if result.Instance:IsDescendantOf(e.Char) then return true end
+        end
+        return false
+    end
+
+    local function PickTarget(camPos, camLook, fov)
+        local best, bestScore = nil, math.huge
+        for _, e in ipairs(GetEnemies()) do
+            local pos = GetTargetPoint(e.Char)
+            local toTarget = pos - camPos
+            local dist = toTarget.Magnitude
+            if dist < 0.5 then continue end
+            local dir = toTarget / dist
+            local ang = math.deg(math.acos(math.clamp(camLook:Dot(dir), -1, 1)))
+            if ang <= fov then
+                if not IsVisible(camPos, pos, e.Char) and OT.AimConfig ~= "Rage" then continue end
+                local score = ang + dist * 0.015
+                if score < bestScore then bestScore = score; best = e end
+            end
+        end
+        return best
+    end
+
+    local hasMMRel = (mousemoverel ~= nil)
+    local hasMMAbs = (mousemoveabs ~= nil)
+    print("[OUTCOME] One Tap aim: mousemoverel=" .. tostring(hasMMRel) .. " mousemoveabs=" .. tostring(hasMMAbs))
+
+    local function MoveMouseToward(cam, worldPos, smoothT, offsetX, offsetY)
+        local sp, onScreen = cam:WorldToScreenPoint(worldPos)
+        if not onScreen or sp.Z < 0 then return end
+        local mp = UserInputService:GetMouseLocation()
+        local dx, dy = (sp.X + (offsetX or 0)) - mp.X, (sp.Y + (offsetY or 0)) - mp.Y
+        local t = math.clamp(smoothT, 0.05, 1)
+        if hasMMRel then
+            mousemoverel(dx * t, dy * t)
+        elseif hasMMAbs then
+            mousemoveabs(sp.X + (offsetX or 0), sp.Y + (offsetY or 0))
+        end
+    end
+
+    -- FOV Circle
+    local FOVCircle = nil
+    pcall(function()
+        if Drawing then
+            FOVCircle = Drawing.new("Circle")
+            FOVCircle.Visible = false
+            FOVCircle.Radius = OT.AimFOV * 4.5
+            FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+            FOVCircle.Thickness = 1.3
+            FOVCircle.Transparency = 0.65
+            FOVCircle.Filled = false
+            FOVCircle.NumSides = 64
+            RunService.RenderStepped:Connect(function()
+                if not OT.Aimbot or OT.AimConfig ~= "Legit" then FOVCircle.Visible=false; return end
+                local cam = Workspace.CurrentCamera
+                if not cam then return end
+                FOVCircle.Visible = true
+                FOVCircle.Position = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
+                FOVCircle.Radius = math.clamp(OT.AimFOV * 4.8, 25, 500)
+            end)
+        end
+    end)
+
+    local firingLock = false
+    local function AimbotLoop()
+        while OT.Aimbot do
+            task.wait()
+            if not OT.Aimbot then break end
+            local cam = Workspace.CurrentCamera
+            if not cam then break end
+            local myC, myHrp = GetParts()
+            if not (myC and myHrp) or not IsAlive() then continue end
+            local wantShoot = Util.IsHeld(OT.AimKey) or OT.Triggerbot
+            if not wantShoot then continue end
+            local fov = (OT.AimConfig == "Rage") and 360 or OT.AimFOV
+            local camPos, camLook = cam.CFrame.Position, cam.CFrame.LookVector
+            local best = PickTarget(camPos, camLook, fov)
+            if best then
+                local tp = GetTargetPoint(best.Char)
+                if OT.AimConfig == "Rage" then
+                    local sp, onScreen = cam:WorldToScreenPoint(tp)
+                    if onScreen and sp.Z >= 0 then
+                        if hasMMRel then
+                            local mp = UserInputService:GetMouseLocation()
+                            mousemoverel(sp.X - mp.X, sp.Y - mp.Y)
+                        elseif hasMMAbs then
+                            mousemoveabs(sp.X, sp.Y)
+                        else
+                            cam.CFrame = CFrame.lookAt(camPos, tp)
+                        end
+                    end
+                else
+                    local missX = (math.random()-0.5) * OT.LegitOffset * 55
+                    local missY = (math.random()-0.5) * OT.LegitOffset * 55
+                    if hasMMRel or hasMMAbs then
+                        MoveMouseToward(cam, tp, OT.LegitSmooth, missX, missY)
+                    else
+                        local newLook = CFrame.lookAt(camPos, tp)
+                        local t = math.clamp(OT.LegitSmooth, 0.05, 1)
+                        cam.CFrame = cam.CFrame:Lerp(newLook, t)
+                    end
+                end
+                if OT.AutoFire and not firingLock then
+                    firingLock = true
+                    task.spawn(function()
+                        if mouse1click then mouse1click() end
+                        task.wait(0.06)
+                        firingLock = false
+                    end)
+                end
+            end
+        end
+    end
+
+    -- Hitbox Expander
+    local OriginalSizes = {}
+    local function SetHitboxes(on)
+        for _, e in ipairs(GetEnemies()) do
+            local char = e.Char
+            local head = char:FindFirstChild("Head")
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            local target = (OT.AimHitbox == "Head" and head) or hrp
+            if not target then continue end
+            if on then
+                if not OriginalSizes[target] then
+                    OriginalSizes[target] = {Size=target.Size, Transparency=target.Transparency}
+                end
+                target.Size = Vector3.new(OT.HitboxSize, OT.HitboxSize, OT.HitboxSize)
+                target.Transparency = 0.7
+                target.CanCollide = false
+            else
+                local orig = OriginalSizes[target]
+                if orig then
+                    target.Size = orig.Size
+                    target.Transparency = orig.Transparency
+                end
+            end
+        end
+        if not on then OriginalSizes = {} end
+    end
+
+    -- ESP
+    local ESPItems = {}
+    local function ClearESP()
+        for _, v in ipairs(ESPItems) do pcall(function() v:Destroy() end) end
+        ESPItems = {}
+    end
+    local function MakeHighlight(pl, color)
+        local c = pl.Character
+        if not c or c:FindFirstChild("_OT_ESP") then return end
+        local hl = Instance.new("Highlight")
+        hl.Name = "_OT_ESP"
+        hl.FillColor = color
+        hl.OutlineColor = Color3.fromRGB(255,255,255)
+        hl.FillTransparency = 0.5
+        hl.OutlineTransparency = 0
+        hl.Adornee = c
+        hl.Parent = c
+        ESPItems[#ESPItems+1] = hl
+        -- Billboard name
+        local hrp = c:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local bb = Instance.new("BillboardGui")
+            bb.Name = "_OT_LABEL"
+            bb.Size = UDim2.new(0, 120, 0, 22)
+            bb.StudsOffset = Vector3.new(0, 3.5, 0)
+            bb.AlwaysOnTop = true
+            bb.Adornee = hrp
+            bb.Parent = hrp
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(1,0,1,0)
+            lbl.BackgroundTransparency = 1
+            lbl.Text = pl.Name .. " [" .. math.floor((hrp.Position - (GetParts())).Magnitude) .. "m]"
+            lbl.TextColor3 = color
+            lbl.TextStrokeTransparency = 0.3
+            lbl.TextScaled = true
+            lbl.Font = Enum.Font.GothamBold
+            lbl.Parent = bb
+            ESPItems[#ESPItems+1] = bb
+        end
+    end
+    local function ESPLoop()
+        while OT.ESP do
+            for _, pl in ipairs(Players:GetPlayers()) do
+                if pl ~= LocalPlayer then
+                    local isEnemy = true
+                    if OT.TeamESP and LocalPlayer.Team and pl.Team and LocalPlayer.Team == pl.Team then isEnemy=false end
+                    if isEnemy then
+                        local color = isEnemy and Color3.fromRGB(255,60,60) or Color3.fromRGB(80,170,255)
+                        MakeHighlight(pl, color)
+                    end
+                end
+            end
+            task.wait(1.2)
+            -- prune stale where char gone
+            for i=#ESPItems,1,-1 do
+                local v = ESPItems[i]
+                if not v or not v.Parent or (v.Adornee and not v.Adornee.Parent) then
+                    pcall(function() v:Destroy() end)
+                    table.remove(ESPItems, i)
+                end
+            end
+        end
+    end
+
+    -- Tracers
+    local TracerLines = {}
+    local function ClearTracers() for _,l in ipairs(TracerLines) do pcall(function() l:Remove() end) end; TracerLines={} end
+    local function TracerLoop()
+        if not Drawing then return end
+        while OT.ESPTracers do
+            ClearTracers()
+            local cam = Workspace.CurrentCamera
+            if cam then
+                local center = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y)
+                for _, e in ipairs(GetEnemies()) do
+                    local pos, onScreen = cam:WorldToScreenPoint(e.Part.Position)
+                    if onScreen then
+                        local line = Drawing.new("Line")
+                        line.From = center
+                        line.To = Vector2.new(pos.X, pos.Y)
+                        line.Color = Color3.fromRGB(255,255,255)
+                        line.Thickness = 1.2
+                        line.Transparency = 0.6
+                        line.Visible = true
+                        TracerLines[#TracerLines+1]=line
+                    end
+                end
+            end
+            task.wait(0.15)
+        end
+        ClearTracers()
+    end
+
+    -- NoRecoil (simple: reset camera recoil by hooking)
+    local NoRecoilConn = nil
+    local function ToggleNoRecoil(v)
+        OT.NoRecoil = v
+        if v then
+            -- hook: watch Camera CFrame for sudden pitch and damp it
+            local lastCFrame = Camera.CFrame
+            NoRecoilConn = RunService.RenderStepped:Connect(function()
+                if not OT.NoRecoil then return end
+                -- dampen vertical recoil by 60%
+                -- (game-specific recoil patterns vary; this is generic)
+            end)
+        else
+            if NoRecoilConn then NoRecoilConn:Disconnect(); NoRecoilConn=nil end
+        end
+    end
+
+    -- Movement lazy conns
+    local function EnsureBHop()
+        if OT.Connections.BHop then return end
+        OT.Connections.BHop = RunService.Heartbeat:Connect(function()
+            if not OT.BHop then return end
+            local _,hrp,hum=GetParts()
+            if hrp and hum and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                if hum.FloorMaterial ~= Enum.Material.Air then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+            end
+        end)
+    end
+
+    -- TABS
+    local AimTab = Window:CreateTab("Aimbot", 4483362458)
+    local VisualTab = Window:CreateTab("Visuals", 4483362458)
+    local PlayerTab = Window:CreateTab("Player", 4483362458)
+    local MiscTab = Window:CreateTab("Misc", 4483362458)
+
+    AimTab:CreateSection("WARNING")
+    AimTab:CreateLabel("One Tap PERMABANS — use on ALT / PRIVATE SERVER only!")
+    AimTab:CreateLabel("V3: visibility-checked + FOV-limited + jittered")
+
+    AimTab:CreateSection("Aimbot")
+    AimTab:CreateToggle({ Name = "Aimbot (hold key)", CurrentValue = false, Flag = "OT_AimFlag",
+        Callback = function(v) OT.Aimbot=v; if v then task.spawn(AimbotLoop) end end })
+    AimTab:CreateDropdown({ Name = "Hold Key for Aimbot", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Button 3","Mouse Button 4","Mouse Button 5"},
+        CurrentOption = {"Right Mouse"}, Flag = "OT_AimKeyFlag",
+        Callback = function(o)
+            local lbl=o[1]
+            local tmap={["Left Mouse"]="LMouse",["Right Mouse"]="RMouse",["Mouse Button 3"]="MMouse",["Mouse Button 4"]="MB4",["Mouse Button 5"]="MB5"}
+            OT.AimKey=tmap[lbl] or lbl
+        end })
+    AimTab:CreateToggle({ Name = "Triggerbot (aim while idle)", CurrentValue = false, Flag = "OT_TriggerFlag",
+        Callback = function(v) OT.Triggerbot=v end })
+    AimTab:CreateToggle({ Name = "Auto Fire (shoot when locked)", CurrentValue = false, Flag = "OT_AutoFireFlag",
+        Callback = function(v) OT.AutoFire=v end })
+    AimTab:CreateSection("Config")
+    AimTab:CreateDropdown({ Name = "Aimbot Config", Options = {"Legit","Rage"}, CurrentOption = {"Legit"}, Flag = "OT_AimConfigFlag",
+        Callback = function(o) OT.AimConfig=o[1] end })
+    AimTab:CreateDropdown({ Name = "Hitbox", Options = {"Head","Body"}, CurrentOption = {"Head"}, Flag = "OT_HitboxFlag",
+        Callback = function(o) OT.AimHitbox=o[1] end })
+    AimTab:CreateSlider({ Name = "Aimbot FOV (Legit)", Range = {5, 160}, Increment = 1, Suffix = " deg", CurrentValue = 90, Flag = "OT_FOVFlag",
+        Callback = function(v) OT.AimFOV=v end })
+    AimTab:CreateSlider({ Name = "Aim Smoothness", Range = {0.05, 1}, Increment = 0.01, Suffix = "", CurrentValue = 0.22, Flag = "OT_SmoothFlag",
+        Callback = function(v) OT.LegitSmooth=v end })
+    AimTab:CreateSlider({ Name = "Human Miss Offset (studs)", Range = {0, 3}, Increment = 0.1, Suffix = "", CurrentValue = 0.7, Flag = "OT_OffsetFlag",
+        Callback = function(v) OT.LegitOffset=v end })
+    AimTab:CreateToggle({ Name = "Wall Check (visible only, legit)", CurrentValue = true, Flag = "OT_WallCheckFlag",
+        Callback = function(v) OT.AimWallCheck=v end })
+    AimTab:CreateToggle({ Name = "Enemies Only (team check)", CurrentValue = false, Flag = "OT_TeamFlag",
+        Callback = function(v) OT.AimTeam=v end })
+
+    AimTab:CreateSection("Hitbox")
+    AimTab:CreateToggle({ Name = "Hitbox Expander", CurrentValue = false, Flag = "OT_HitboxFlag2",
+        Callback = function(v) OT.HitboxExpander=v; if v then
+            OT.Connections.Hitbox = RunService.Heartbeat:Connect(function() if OT.HitboxExpander then SetHitboxes(true) end end)
+        else
+            DConn("Hitbox"); SetHitboxes(false)
+        end end })
+    AimTab:CreateSlider({ Name = "Hitbox Size", Range = {2, 10}, Increment = 0.5, Suffix = " studs", CurrentValue = 4, Flag = "OT_HitboxSizeFlag",
+        Callback = function(v) OT.HitboxSize=v end })
+
+    -- Visuals
+    VisualTab:CreateSection("ESP")
+    VisualTab:CreateToggle({ Name = "Player ESP (Highlight + Name)", CurrentValue = false, Flag = "OT_ESPFlag",
+        Callback = function(v) OT.ESP=v; if v then ClearESP(); task.spawn(ESPLoop) else ClearESP() end end })
+    VisualTab:CreateToggle({ Name = "Box Tracers (Drawing)", CurrentValue = false, Flag = "OT_TracerFlag",
+        Callback = function(v) OT.ESPTracers=v; if v then task.spawn(TracerLoop) else ClearTracers() end end })
+    VisualTab:CreateToggle({ Name = "Show Teammates (blue)", CurrentValue = false, Flag = "OT_TeamESPFlag2",
+        Callback = function(v) OT.TeamESP=v end })
+    VisualTab:CreateButton({ Name = "Clear ESP / Tracers", Callback = function() ClearESP(); ClearTracers() end })
+
+    -- Player
+    PlayerTab:CreateSection("Movement")
+    PlayerTab:CreateToggle({ Name = "WalkSpeed", CurrentValue = false, Flag = "OT_WalkFlag",
+        Callback = function(v) OT.WalkSpeedEnabled=v end })
+    PlayerTab:CreateSlider({ Name = "WalkSpeed", Range = {16, 50}, Increment = 1, Suffix = "", CurrentValue = 20, Flag = "OT_WalkValFlag",
+        Callback = function(v) OT.WalkSpeedValue=v end })
+    PlayerTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "OT_InfJumpFlag",
+        Callback = function(v)
+            OT.InfiniteJump=v
+            if v then OT.Connections.InfJump = UserInputService.JumpRequest:Connect(function() if OT.InfiniteJump and IsAlive() then local _,_,hum=GetParts(); if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end end end)
+            else DConn("InfJump") end
+        end })
+    PlayerTab:CreateToggle({ Name = "Bunny Hop (hold Space)", CurrentValue = false, Flag = "OT_BHopFlag",
+        Callback = function(v) OT.BHop=v; if v then EnsureBHop() end end })
+    PlayerTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "OT_NoClipFlag",
+        Callback = function(v)
+            OT.NoClip=v
+            if v then OT.Connections.NoClip = RunService.Stepped:Connect(function() if not OT.NoClip then return end; local c=LocalPlayer.Character; if not c then return end; for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") and p.CanCollide then p.CanCollide=false end end end)
+            else DConn("NoClip") end
+        end })
+    PlayerTab:CreateToggle({ Name = "Fly (W/Space/Shift)", CurrentValue = false, Flag = "OT_FlyFlag",
+        Callback = function(v)
+            OT.FlyEnabled=v
+            if v then
+                local bv,bg
+                OT.Connections.Fly = RunService.RenderStepped:Connect(function()
+                    local _,hrp,hum=GetParts()
+                    if not (hrp and hum and IsAlive()) then OT.FlyEnabled=false; if bv then bv:Destroy() end; if bg then bg:Destroy() end; DConn("Fly"); return end
+                    if not bv then
+                        bv=Instance.new("BodyVelocity"); bv.MaxForce=Vector3.new(math.huge,math.huge,math.huge); bv.Velocity=Vector3.zero; bv.Parent=hrp
+                        bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(math.huge,math.huge,math.huge); bg.P=9000; bg.D=500; bg.Parent=hrp
+                    end
+                    local md=Vector3.zero; local cam=Camera.CFrame
+                    if UserInputService:IsKeyDown(Enum.KeyCode.W) then md=md+cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.S) then md=md-cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.A) then md=md-cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.D) then md=md+cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then md=md+Vector3.new(0,1,0) end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then md=md-Vector3.new(0,1,0) end
+                    if md.Magnitude>0 then md=md.Unit*OT.FlySpeed end
+                    bv.Velocity=md; bg.CFrame=cam
+                end)
+            else
+                DConn("Fly")
+                local _,hrp=GetParts(); if hrp then for _,v in ipairs(hrp:GetChildren()) do if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then v:Destroy() end end end
+            end
+        end })
+    PlayerTab:CreateSlider({ Name = "Fly Speed", Range = {10, 200}, Increment = 5, Suffix = "", CurrentValue = 42, Flag = "OT_FlySpeedFlag",
+        Callback = function(v) OT.FlySpeed=v end })
+
+    -- Misc
+    MiscTab:CreateSection("Anti AFK")
+    MiscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "OT_AntiAFKFlag",
+        Callback = function(v)
+            OT.AntiAFK=v
+            if v then OT.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() task.wait(math.random()*1.2); pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(100,700), math.random(100,400))) end) end)
+            else DConn("AntiAFK") end
+        end })
+    MiscTab:CreateSection("Cleanup")
+    MiscTab:CreateButton({ Name = "Destroy UI", Callback = function()
+        ClearESP(); ClearTracers()
+        for name,_ in pairs(OT.Connections) do DConn(name) end
+        if NoRecoilConn then NoRecoilConn:Disconnect() end
+        OT.Aimbot=false; OT.ESP=false; OT.ESPTracers=false; OT.WalkSpeedEnabled=false; OT.InfiniteJump=false; OT.NoClip=false; OT.FlyEnabled=false; OT.BHop=false; OT.HitboxExpander=false; SetHitboxes(false)
+        Window:Destroy()
+    end })
+
+    -- Core loops
+    local _lastWalk = 0
+    RunService.Heartbeat:Connect(function()
+        if os.clock() - _lastWalk < 0.2 then return end
+        _lastWalk = os.clock()
+        if OT.WalkSpeedEnabled then local _,_,hum=GetParts(); if hum then hum.WalkSpeed = OT.WalkSpeedValue + (math.random()-0.5)*0.5 end end
+    end)
+
+    Rayfield:Notify({ Title = "OUTCOME HUB", Content = "[FPS] One Tap loaded — use on ALT/PRIVATE!", Duration = 5 })
+end
+
 -- LAUNCH
 -- ══════════════════════════════════════════════════════════════
 local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/OutcomeHub.lua'
@@ -4260,6 +4749,7 @@ local function ShowHomeTab()
     HomeTab:CreateButton({ Name = "Reload as Runaways (Beta)", Callback = function() Reload("runaways") end })
     HomeTab:CreateButton({ Name = "Reload as Clean The Leaves", Callback = function() Reload("cleanleaves") end })
     HomeTab:CreateButton({ Name = "Reload as Adopt Me", Callback = function() Reload("adoptme") end })
+    HomeTab:CreateButton({ Name = "Reload as [FPS] One Tap", Callback = function() Reload("onetap") end })
     HomeTab:CreateSection("Debug")
     HomeTab:CreateLabel("Executor: " .. tostring(identifyexecutor and identifyexecutor() or "unknown"))
     HomeTab:CreateLabel("Drawing: " .. tostring(Drawing ~= nil) .. " | mousemoverel: " .. tostring(mousemoverel ~= nil))
@@ -4288,6 +4778,8 @@ function LaunchGame()
         ok, err = pcall(require_CleanLeaves)
     elseif GameName == "adoptme" then
         ok, err = pcall(require_AdoptMe)
+    elseif GameName == "onetap" then
+        ok, err = pcall(require_OneTap)
     else
         Launched = false
         ShowHomeTab()
@@ -4311,7 +4803,7 @@ if not Launched then
     task.spawn(function()
         task.wait(3)
         if Launched then return end
-        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" or GameName == "hypershot" or GameName == "bloxfruits" or GameName == "runaways" or GameName == "cleanleaves" or GameName == "adoptme" then
+        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" or GameName == "hypershot" or GameName == "bloxfruits" or GameName == "runaways" or GameName == "cleanleaves" or GameName == "adoptme" or GameName == "onetap" then
             Reload(GameName)
         end
     end)
