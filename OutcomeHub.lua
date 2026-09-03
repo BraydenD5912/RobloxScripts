@@ -4252,6 +4252,8 @@ function require_OneTap()
     local VirtualUser = game:GetService("VirtualUser")
 
     local Camera = Workspace.CurrentCamera
+    -- keep Camera updated if game switches it
+    Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function() Camera = Workspace.CurrentCamera end)
 
     local OT = {
         Aimbot = false, AimFOV = 90, AimTeam = false, AimWallCheck = true,
@@ -4288,39 +4290,64 @@ function require_OneTap()
         local myTeam = LocalPlayer.Team
         for _, pl in ipairs(Players:GetPlayers()) do
             if pl == LocalPlayer then continue end
-            if not pl.Character then continue end
-            local hrp = pl.Character:FindFirstChild("HumanoidRootPart")
-            local hum = pl.Character:FindFirstChildOfClass("Humanoid")
-            if not hrp or not hum or hum.Health <= 0 then continue end
+            local char = pl.Character
+            if not char then continue end
+            -- tolerate missing HumanoidRootPart name variations
+            local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or char:FindFirstChildWhichIsA("BasePart")
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            -- if no humanoid, still consider if has root part (some FPS use custom)
+            if not hrp then continue end
+            if hum and hum.Health <= 0 then continue end
             if OT.AimTeam and myTeam and pl.Team and myTeam == pl.Team then continue end
-            table.insert(list, {Pl=pl, Part=hrp, Hum=hum, Char=pl.Character})
+            -- additional: skip if char is invisible (no parts)
+            if not char.Parent then continue end
+            table.insert(list, {Pl=pl, Part=hrp, Hum=hum, Char=char})
         end
         return list
     end
 
     local function GetTargetPoint(char)
         local part
-        if OT.AimHitbox == "Head" then part = char:FindFirstChild("Head")
-        elseif OT.AimHitbox == "Body" then part = char:FindFirstChild("HumanoidRootPart")
-        else part = char:FindFirstChild("HumanoidRootPart") end
-        if part then return part.Position + Vector3.new(0, 0.2, 0) end
+        if OT.AimHitbox == "Head" then
+            part = char:FindFirstChild("Head") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+        elseif OT.AimHitbox == "Body" then
+            part = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+        else
+            part = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Head")
+        end
+        -- try case-insensitive fallback
+        if not part then
+            for _, ch in ipairs(char:GetChildren()) do
+                if ch:IsA("BasePart") and (ch.Name:lower():find("head") or ch.Name:lower():find("torso") or ch.Name:lower():find("root")) then
+                    part = ch; break
+                end
+            end
+        end
+        if part then return part.Position + Vector3.new(0, 0.15, 0) end
         local hrp = char:FindFirstChild("HumanoidRootPart")
-        return hrp and hrp.Position or Vector3.zero
+        if hrp then return hrp.Position + Vector3.new(0, 1.5, 0) end
+        -- last resort: char pivot
+        local ok, cf = pcall(function() return char:GetPivot() end)
+        if ok and cf then return cf.Position + Vector3.new(0, 1.5, 0) end
+        return Vector3.zero
     end
 
-    local function IsVisible(from, to, ignoreChar)
+    local function IsVisible(from, to)
         if not OT.AimWallCheck then return true end
         local params = RaycastParams.new()
-        params.FilterDescendantsInstances = {ignoreChar or LocalPlayer.Character, Camera}
+        params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
         params.FilterType = Enum.RaycastFilterType.Exclude
         local dir = to - from
         local result = Workspace:Raycast(from, dir, params)
         if not result then return true end
-        -- if hit is descendant of target char, visible
-        -- we check by seeing if hit instance is inside any enemy char
+        -- if ray hits terrain or map wall first, not visible
+        -- if hit is descendant of any player character, consider visible (hits player)
         for _, e in ipairs(GetEnemies()) do
             if result.Instance:IsDescendantOf(e.Char) then return true end
         end
+        -- also allow if hit is nil? else blocked
+        -- check if hit is close to target (within 3 studs, might be wall edge)
+        -- for FFA, any hit that is not terrain but close to target is considered visible
         return false
     end
 
@@ -4334,7 +4361,7 @@ function require_OneTap()
             local dir = toTarget / dist
             local ang = math.deg(math.acos(math.clamp(camLook:Dot(dir), -1, 1)))
             if ang <= fov then
-                if not IsVisible(camPos, pos, e.Char) and OT.AimConfig ~= "Rage" then continue end
+                if not IsVisible(camPos, pos) and OT.AimConfig ~= "Rage" then continue end
                 local score = ang + dist * 0.015
                 if score < bestScore then bestScore = score; best = e end
             end
@@ -4468,15 +4495,23 @@ function require_OneTap()
     end
     local function MakeHighlight(pl, color)
         local c = pl.Character
-        if not c or c:FindFirstChild("_OT_ESP") then return end
+        if not c then return end
+        if c:FindFirstChild("_OT_ESP") then return end
+        if #ESPItems >= 30 then
+            local old = table.remove(ESPItems, 1)
+            pcall(function() old:Destroy() end)
+        end
         local hl = Instance.new("Highlight")
         hl.Name = "_OT_ESP"
+        hl.Adornee = c
         hl.FillColor = color
         hl.OutlineColor = Color3.fromRGB(255,255,255)
-        hl.FillTransparency = 0.5
+        hl.FillTransparency = 0.35
         hl.OutlineTransparency = 0
-        hl.Adornee = c
-        hl.Parent = c
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        -- try CoreGui for visibility, fallback to character
+        local ok = pcall(function() hl.Parent = game:GetService("CoreGui") end)
+        if not ok or not hl.Parent then hl.Parent = c end
         ESPItems[#ESPItems+1] = hl
         -- Billboard name
         local hrp = c:FindFirstChild("HumanoidRootPart")
@@ -4502,8 +4537,10 @@ function require_OneTap()
     end
     local function ESPLoop()
         while OT.ESP do
+            local existing = {}
+            for _, v in ipairs(ESPItems) do if v:IsA("Highlight") and v.Adornee then existing[v.Adornee] = true end end
             for _, pl in ipairs(Players:GetPlayers()) do
-                if pl ~= LocalPlayer then
+                if pl ~= LocalPlayer and pl.Character and not existing[pl.Character] then
                     local isEnemy = true
                     if OT.TeamESP and LocalPlayer.Team and pl.Team and LocalPlayer.Team == pl.Team then isEnemy=false end
                     if isEnemy then
