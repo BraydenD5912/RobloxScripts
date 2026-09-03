@@ -1,7 +1,7 @@
 -- ══════════════════════════════════════════════════════════════
 -- OUTCOME HUB — Multi-Game Roblox Hub v3 (improved)
 -- Auto-detects the game and loads the right module
--- Games: +1 Speed Keyboard Escape | Basketball Legends | Sniper Duels | Hypershot | Blox Fruits | Runaways | Clean The Leaves | Adopt Me
+-- Games: +1 Speed Keyboard Escape | Basketball Legends | Sniper Duels | Hypershot | Blox Fruits | Runaways | Clean The Leaves | Adopt Me | 99 Nights in the Forest
 -- Improvements: throttled scans, ESP pooling, reversible WhiteScreen, lazy Fly/NoClip, visibility-checked aimbot, humanized jitter
 -- ══════════════════════════════════════════════════════════════
 
@@ -156,6 +156,9 @@ local KNOWN_PLACE_IDS = {
     ["920587237"]      = "adoptme",        -- Adopt Me (classic)
     ["603519598"]      = "adoptme",        -- Adopt Me (new)
     ["14600811883"]    = "adoptme",        -- Adopt Me (private server)
+    ["79546208627805"] = "ninetynights",   -- 99 Nights in the Forest (main)
+    ["12650999930"]    = "ninetynights",   -- 99 Nights in the Forest (old)
+    ["7326934954"]     = "ninetynights",   -- 99 Nights universe
 }
 
 local function DetectGame()
@@ -189,6 +192,10 @@ local function DetectGame()
         GameName = "cleanleaves"
     elseif pn:find("adopt") then
         GameName = "adoptme"
+    elseif pn:find("99") and pn:find("night") then
+        GameName = "ninetynights"
+    elseif pn:find("forest") and pn:find("night") then
+        GameName = "ninetynights"
     elseif pn:find("keyboard") or pn:find("escape") or pn:find("speed") then
         GameName = "keyboardescape"
     end
@@ -219,6 +226,10 @@ task.spawn(function()
             GameName = "cleanleaves"
         elseif n:find("adopt") then
             GameName = "adoptme"
+        elseif n:find("99") and n:find("night") then
+            GameName = "ninetynights"
+        elseif n:find("forest") and n:find("night") then
+            GameName = "ninetynights"
         elseif n:find("keyboard") or n:find("escape") or n:find("speed") then
             GameName = "keyboardescape"
         end
@@ -241,6 +252,7 @@ local Window = Rayfield:CreateWindow({
         or (GameName == "runaways" and "Runaways (Beta)")
         or (GameName == "cleanleaves" and "Clean The Leaves")
         or (GameName == "adoptme" and "Adopt Me")
+        or (GameName == "ninetynights" and "99 Nights in the Forest")
         or "Game: " .. tostring(game.Name),
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
@@ -4236,6 +4248,975 @@ end
 -- GAME MODULE: [FPS] ONE TAP
 -- ═══════════════════════════════════════════════════════════════
 
+
+-- ═══════════════════════════════════════════════════════════════
+-- GAME MODULE: 99 NIGHTS IN THE FOREST
+-- ═══════════════════════════════════════════════════════════════
+function require_NinetyNights()
+    local Players = game:GetService("Players")
+    local LocalPlayer = Players.LocalPlayer
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local Workspace = game:GetService("Workspace")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local VirtualUser = game:GetService("VirtualUser")
+    local Lighting = game:GetService("Lighting")
+    local TweenService = game:GetService("TweenService")
+    local ProximityPromptService = game:GetService("ProximityPromptService")
+
+    local Camera = Workspace.CurrentCamera
+
+    local NF = {
+        -- Main
+        AutoFeed = false, FeedThreshold = 70,
+        InstantInteract = false,
+        AutoStunDeer = false, StunRange = 60,
+        -- Auto Collect
+        AutoCollect = false, CollectRadius = 120,
+        AutoCoins = true, AutoAmmo = true, AutoWeapons = true, AutoFuel = true, AutoFood = true, AutoMedical = true, AutoEquipment = true, AutoJunk = true,
+        AutoUpgradeCampfire = false, UpgradeDelay = 3,
+        AutoCook = false,
+        -- Combat
+        KillAura = false, KillRange = 25, KillDelay = 0.15,
+        ChopAura = false, ChopRange = 25, ChopDelay = 0.2,
+        BringAura = false, BringRadius = 150,
+        -- Teleport
+        ClickTP = false,
+        -- Player
+        WalkSpeedEnabled = false, WalkSpeedValue = 28,
+        JumpPowerEnabled = false, JumpPowerValue = 60,
+        InfiniteJump = false, NoClip = false,
+        FlyEnabled = false, FlySpeed = 60,
+        BHop = false,
+        InfiniteStamina = false,
+        -- ESP
+        ItemESP = false, EntityESP = false, PlayerESP = false, ChestESP = false, ChildESP = false,
+        ESPDistance = 300,
+        -- Env
+        DisableFog = false, FullBright = false, DisableNightEffect = false,
+        NoDeerJumpScare = false,
+        -- Misc
+        AntiAFK = false,
+        Connections = {},
+    }
+
+    local function DConn(name) if NF.Connections[name] then pcall(function() NF.Connections[name]:Disconnect() end); NF.Connections[name]=nil end end
+    local function GetParts()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        return char, hrp, hum
+    end
+    local function IsAlive()
+        local _,_,hum=GetParts()
+        return hum and hum.Health>0
+    end
+
+    -- Locations
+    local Campfire = nil
+    local function FindCampfire()
+        if Campfire and Campfire.Parent then return Campfire end
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            local n = obj.Name:lower()
+            if (n:find("campfire") or n:find("camp fire") or n:find("firepit")) and obj:IsA("BasePart") then
+                Campfire = obj
+                return obj
+            end
+            if n=="campfire" and obj:IsA("Model") then
+                local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                if pp then Campfire = pp; return pp end
+            end
+        end
+        return nil
+    end
+
+    local function GetCampCFrame()
+        local cf = FindCampfire()
+        if cf then return cf.CFrame end
+        -- fallback to origin
+        return CFrame.new(0,5,0)
+    end
+
+    -- Find entities (Deer, Wolf, Cultist, Owl, etc)
+    local function FindEntities()
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+                    local isPlayer = false
+                    for _, pl in ipairs(Players:GetPlayers()) do if pl.Character==obj then isPlayer=true; break end end
+                    if not isPlayer then
+                        local name = obj.Name:lower()
+                        if name:find("deer") or name:find("wolf") or name:find("cultist") or name:find("owl") or name:find("ram") or name:find("beast") or name:find("monster") or name:find("enemy") or name:find("bear") or name:find("alpha") then
+                            table.insert(out, obj)
+                        end
+                    end
+                end
+            end
+        end)
+        return out
+    end
+
+    local function FindNearestEntity(range)
+        local _, hrp = GetParts()
+        if not hrp then return nil end
+        local best, dist = nil, range or NF.KillRange
+        for _, e in ipairs(FindEntities()) do
+            local hr = e:FindFirstChild("HumanoidRootPart")
+            local hum = e:FindFirstChildOfClass("Humanoid")
+            if hr and hum and hum.Health>0 then
+                local d = (hrp.Position - hr.Position).Magnitude
+                if d < dist then dist=d; best=e end
+            end
+        end
+        return best
+    end
+
+    -- Find choppable trees
+    local function FindTrees(range)
+        local _, hrp = GetParts()
+        if not hrp then return {} end
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                local n = obj.Name:lower()
+                if (n:find("tree") or n:find("log") or n:find("wood") or n:find("trunk")) and obj:IsA("BasePart") then
+                    if (hrp.Position - obj.Position).Magnitude <= (range or NF.ChopRange) then
+                        table.insert(out, obj)
+                    end
+                elseif n:find("tree") and obj:IsA("Model") then
+                    local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                    if pp and (hrp.Position - pp.Position).Magnitude <= (range or NF.ChopRange) then
+                        table.insert(out, pp)
+                    end
+                end
+            end
+        end)
+        return out
+    end
+
+    -- Find items by category
+    local function FindItems(category)
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj:IsA("ProximityPrompt") then
+                    local text = (obj.ObjectText or ""):lower() .. " " .. (obj.ActionText or ""):lower() .. " " .. obj.Name:lower()
+                    local parent = obj.Parent
+                    local part = parent and parent:IsA("BasePart") and parent or parent and parent:FindFirstChildWhichIsA("BasePart")
+                    if not part then continue end
+                    local match = false
+                    if category=="all" then match=true
+                    elseif category=="fuel" and (text:find("fuel") or text:find("log") or text:find("coal") or text:find("wood") or obj.Name:lower():find("fuel")) then match=true
+                    elseif category=="food" and (text:find("food") or text:find("berry") or text:find("meat") or text:find("apple") or text:find("carrot") or text:find("cook")) then match=true
+                    elseif category=="medical" and (text:find("med") or text:find("bandage") or text:find("heal")) then match=true
+                    elseif category=="equipment" and (text:find("axe") or text:find("sack") or text:find("flashlight") or text:find("spear") or text:find("weapon")) then match=true
+                    elseif category=="junk" and (text:find("scrap") or text:find("junk") or text:find("bolt") or text:find("gear")) then match=true
+                    elseif category=="weapon" and (text:find("rifle") or text:find("gun") or text:find("spear") or text:find("axe")) then match=true
+                    end
+                    if match then table.insert(out, {prompt=obj, part=part}) end
+                elseif obj:IsA("Tool") then
+                    local n = obj.Name:lower()
+                    if category=="all" or (category=="weapon" and (n:find("axe") or n:find("spear") or n:find("rifle"))) or (category=="equipment" and n:find("flash")) then
+                        local handle = obj:FindFirstChild("Handle")
+                        if handle then table.insert(out, {prompt=nil, part=handle, tool=obj}) end
+                    end
+                end
+            end
+        end)
+        return out
+    end
+
+    local function FindChests()
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                local n = obj.Name:lower()
+                if (n:find("chest") or n:find("crate") or n:find("loot") or n:find("box")) and (obj:IsA("Model") or obj:IsA("BasePart")) then
+                    local part = obj:IsA("BasePart") and obj or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                    if part then table.insert(out, part) end
+                end
+            end
+        end)
+        return out
+    end
+
+    local function FindChildren()
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                local n = obj.Name:lower()
+                if (n:find("child") or n:find("kid") or n:find("missing")) and (obj:IsA("Model") or obj:IsA("BasePart")) then
+                    local part = obj:IsA("BasePart") and obj or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart") or obj:FindFirstChild("HumanoidRootPart")
+                    if part then table.insert(out, part) end
+                end
+            end
+            -- also check for BillboardGui with child icon
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj:IsA("BillboardGui") and obj.Name:lower():find("child") then
+                    local adornee = obj.Adornee
+                    if adornee and adornee:IsA("BasePart") then table.insert(out, adornee) end
+                end
+            end
+        end)
+        return out
+    end
+
+    local function FindAmmoAndCoins()
+        local out = {}
+        pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj:IsA("BasePart") then
+                    local n = obj.Name:lower()
+                    if n:find("ammo") or n:find("coin") or n:find("gem") or n:find("bolt") or n:find("scrap") then
+                        table.insert(out, obj)
+                    end
+                end
+                if obj:IsA("Tool") and obj.Name:lower():find("ammo") then
+                    local h = obj:FindFirstChild("Handle")
+                    if h then table.insert(out, h) end
+                end
+            end
+        end)
+        return out
+    end
+
+    -- Teleport helper humanized
+    local function TeleportTo(cf, offset)
+        local _, hrp = GetParts()
+        if not hrp then return end
+        offset = offset or Vector3.new((math.random()-0.5)*2, 0, (math.random()-0.5)*2)
+        hrp.AssemblyLinearVelocity = Vector3.new(0, hrp.AssemblyLinearVelocity.Y, 0)
+        hrp.CFrame = cf + offset
+        task.wait(0.08 + math.random()*0.05)
+    end
+
+    -- Auto Feed
+    local function DoAutoFeed()
+        if not NF.AutoFeed then return end
+        local _, hrp, hum = GetParts()
+        if not hrp or not hum then return end
+        -- hunger check via attribute or gui
+        local hunger = 100
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            if pg then
+                for _, gui in ipairs(pg:GetDescendants()) do
+                    if gui:IsA("TextLabel") and gui.Text:lower():find("hunger") then
+                        local num = tonumber(gui.Text:match("%d+"))
+                        if num then hunger = num end
+                    end
+                end
+            end
+            local char = LocalPlayer.Character
+            if char and char:GetAttribute("Hunger") then hunger = char:GetAttribute("Hunger") end
+            if LocalPlayer:GetAttribute("Hunger") then hunger = LocalPlayer:GetAttribute("Hunger") end
+        end)
+        if hunger > NF.FeedThreshold then return end
+        -- find food
+        local foods = FindItems("food")
+        table.sort(foods, function(a,b) return (hrp.Position - a.part.Position).Magnitude < (hrp.Position - b.part.Position).Magnitude end)
+        for _, f in ipairs(foods) do
+            if not NF.AutoFeed then break end
+            if (hrp.Position - f.part.Position).Magnitude < 60 then
+                TeleportTo(f.part.CFrame + Vector3.new(0,3,0))
+                task.wait(0.4)
+                if f.prompt then pcall(function() fireproximityprompt(f.prompt) end) end
+                pcall(function() firetouchinterest(hrp, f.part, 0); firetouchinterest(hrp, f.part, 1) end)
+                task.wait(0.3)
+                break
+            end
+        end
+    end
+
+    -- Instant Interact (hook ProximityPromptService)
+    local InstantHooked = false
+    local function ToggleInstant(v)
+        NF.InstantInteract = v
+        if v and not InstantHooked then
+            InstantHooked = true
+            pcall(function()
+                ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
+                    if NF.InstantInteract and prompt and prompt.Parent then
+                        pcall(function() fireproximityprompt(prompt) end)
+                    end
+                end)
+            end)
+            -- also hook HoldDuration
+            task.spawn(function()
+                while NF.InstantInteract do
+                    pcall(function()
+                        for _, prompt in ipairs(Workspace:GetDescendants()) do
+                            if prompt:IsA("ProximityPrompt") and prompt.HoldDuration > 0 then
+                                prompt.HoldDuration = 0
+                            end
+                        end
+                    end)
+                    task.wait(1)
+                end
+            end)
+        end
+    end
+
+    -- Kill Aura
+    local function KillAuraLoop()
+        while NF.KillAura do
+            if not IsAlive() then task.wait(1) continue end
+            local target = FindNearestEntity(NF.KillRange)
+            if target then
+                local _, hrp = GetParts()
+                local thr = target:FindFirstChild("HumanoidRootPart")
+                if hrp and thr then
+                    -- teleport slightly behind
+                    TeleportTo(thr.CFrame * CFrame.new(0, 0, 2))
+                    -- equip best weapon
+                    local char = LocalPlayer.Character
+                    local tool = char and char:FindFirstChildOfClass("Tool")
+                    if not tool then
+                        local bp = LocalPlayer:FindFirstChild("Backpack")
+                        if bp then
+                            for _, t in ipairs(bp:GetChildren()) do
+                                if t:IsA("Tool") and (t.Name:lower():find("axe") or t.Name:lower():find("spear") or t.Name:lower():find("rifle")) then
+                                    char.Humanoid:EquipTool(t); break
+                                end
+                            end
+                        end
+                    end
+                    tool = char and char:FindFirstChildOfClass("Tool")
+                    if tool then
+                        pcall(function() tool:Activate() end)
+                        -- also try VirtualUser click
+                        pcall(function() VirtualUser:ClickButton1(Vector2.new(500,500)) end)
+                    end
+                    -- Also try to damage via remote if found
+                    pcall(function()
+                        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+                            if obj:IsA("RemoteEvent") and obj.Name:lower():find("damage") then
+                                obj:FireServer(target)
+                            end
+                        end
+                    end)
+                end
+            end
+            task.wait(NF.KillDelay + math.random()*0.05)
+        end
+    end
+
+    -- Chop Aura
+    local function ChopAuraLoop()
+        while NF.ChopAura do
+            if not IsAlive() then task.wait(1) continue end
+            local trees = FindTrees(NF.ChopRange)
+            if #trees > 0 then
+                local tree = trees[1]
+                local _, hrp = GetParts()
+                if hrp then TeleportTo(tree.CFrame + Vector3.new(0,2,0)) end
+                local char = LocalPlayer.Character
+                local tool = char and char:FindFirstChildOfClass("Tool")
+                if not tool then
+                    local bp = LocalPlayer:FindFirstChild("Backpack")
+                    if bp then
+                        for _, t in ipairs(bp:GetChildren()) do
+                            if t:IsA("Tool") and t.Name:lower():find("axe") then
+                                char.Humanoid:EquipTool(t); break
+                            end
+                        end
+                    end
+                end
+                tool = char and char:FindFirstChildOfClass("Tool")
+                if tool then pcall(function() tool:Activate() end) end
+            end
+            task.wait(NF.ChopDelay)
+        end
+    end
+
+    -- Bring items
+    local function BringItems(category)
+        local _, hrp = GetParts()
+        if not hrp then return end
+        local items = FindItems(category)
+        local camp = GetCampCFrame()
+        for _, it in ipairs(items) do
+            if it.part and it.part.Parent then
+                if (hrp.Position - it.part.Position).Magnitude <= NF.BringRadius then
+                    -- bring to campfire
+                    pcall(function()
+                        it.part.CFrame = camp + Vector3.new(math.random(-8,8), 2, math.random(-8,8))
+                        if it.part:FindFirstChild("AssemblyLinearVelocity") then
+                            it.part.AssemblyLinearVelocity = Vector3.zero
+                        end
+                    end)
+                end
+            end
+        end
+        -- also for loose parts (ammo/coins)
+        if category=="all" or category=="junk" then
+            for _, part in ipairs(FindAmmoAndCoins()) do
+                if (hrp.Position - part.Position).Magnitude <= NF.BringRadius then
+                    pcall(function() part.CFrame = camp + Vector3.new(math.random(-5,5), 1, math.random(-5,5)) end)
+                end
+            end
+        end
+    end
+
+    -- Auto Collect loop
+    local function AutoCollectLoop()
+        while NF.AutoCollect do
+            if not IsAlive() then task.wait(1) continue end
+            local _, hrp = GetParts()
+            if not hrp then task.wait(0.5) continue end
+            local picks = {}
+            if NF.AutoCoins then for _, p in ipairs(FindAmmoAndCoins()) do table.insert(picks, p) end end
+            if NF.AutoWeapons then for _, it in ipairs(FindItems("weapon")) do if it.part then table.insert(picks, it.part) end end end
+            if NF.AutoEquipment then for _, it in ipairs(FindItems("equipment")) do if it.part then table.insert(picks, it.part) end end end
+            if NF.AutoFood then for _, it in ipairs(FindItems("food")) do if it.part then table.insert(picks, it.part) end end end
+            if NF.AutoFuel then for _, it in ipairs(FindItems("fuel")) do if it.part then table.insert(picks, it.part) end end end
+            -- sort by nearest
+            table.sort(picks, function(a,b) return (hrp.Position - a.Position).Magnitude < (hrp.Position - b.Position).Magnitude end)
+            for i=1, math.min(3, #picks) do
+                local part = picks[i]
+                if part and part.Parent and (hrp.Position - part.Position).Magnitude < NF.CollectRadius then
+                    TeleportTo(part.CFrame + Vector3.new(0,2,0))
+                    task.wait(0.3)
+                    local prompt = part:FindFirstChildWhichIsA("ProximityPrompt") or part.Parent and part.Parent:FindFirstChildWhichIsA("ProximityPrompt")
+                    if prompt then pcall(function() fireproximityprompt(prompt) end) end
+                    pcall(function() firetouchinterest(hrp, part, 0); firetouchinterest(hrp, part, 1) end)
+                    task.wait(0.2)
+                end
+            end
+            task.wait(0.8)
+        end
+    end
+
+    -- Campfire upgrade
+    local function CampfireLoop()
+        while NF.AutoUpgradeCampfire do
+            local camp = FindCampfire()
+            local _, hrp = GetParts()
+            if camp and hrp and (hrp.Position - camp.Position).Magnitude < 30 then
+                -- find upgrade prompt near campfire
+                for _, obj in ipairs(Workspace:GetDescendants()) do
+                    if obj:IsA("ProximityPrompt") and obj.Enabled and (obj.Parent.Position - camp.Position).Magnitude < 20 then
+                        local txt = (obj.ObjectText or ""):lower() .. " " .. (obj.ActionText or ""):lower()
+                        if txt:find("upgrade") or txt:find("campfire") or txt:find("fuel") then
+                            pcall(function() fireproximityprompt(obj) end)
+                        end
+                    end
+                end
+            end
+            task.wait(NF.UpgradeDelay)
+        end
+    end
+
+    -- Stun Deer
+    local function StunDeerLoop()
+        while NF.AutoStunDeer do
+            local _, hrp = GetParts()
+            if not hrp then task.wait(0.5) continue end
+            for _, e in ipairs(FindEntities()) do
+                if e.Name:lower():find("deer") then
+                    local hr = e:FindFirstChild("HumanoidRootPart")
+                    if hr and (hrp.Position - hr.Position).Magnitude < NF.StunRange then
+                        -- Flashlight stun: equip flashlight and activate
+                        local char = LocalPlayer.Character
+                        local hasFlash = char and char:FindFirstChildWhichIsA("Tool") and char:FindFirstChildWhichIsA("Tool").Name:lower():find("flash")
+                        if not hasFlash then
+                            local bp = LocalPlayer:FindFirstChild("Backpack")
+                            if bp then
+                                for _, t in ipairs(bp:GetChildren()) do
+                                    if t.Name:lower():find("flash") then
+                                        char.Humanoid:EquipTool(t); break
+                                    end
+                                end
+                            end
+                        end
+                        local tool = char and char:FindFirstChildOfClass("Tool")
+                        if tool then pcall(function() tool:Activate() end) end
+                        -- look at deer
+                        Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, hr.Position)
+                    end
+                end
+            end
+            task.wait(0.5)
+        end
+    end
+
+    -- ESP
+    local ESPItems = {}
+    local function ClearESP()
+        for _, v in ipairs(ESPItems) do pcall(function() v:Destroy() end) end
+        ESPItems = {}
+    end
+    local function MakeESP(obj, color, text)
+        if not obj or not obj.Parent then return end
+        local adornee = obj:IsA("BasePart") and obj or obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart") or obj:FindFirstChild("HumanoidRootPart")) or obj:FindFirstChildWhichIsA("BasePart")
+        if not adornee then return end
+        if adornee:FindFirstChild("_NF_ESP") then return end
+        local hl = Instance.new("Highlight")
+        hl.Name = "_NF_ESP"
+        hl.Adornee = obj:IsA("Model") and obj or adornee.Parent
+        if not hl.Adornee or not hl.Adornee.Parent then hl.Adornee = adornee end
+        hl.FillColor = color
+        hl.OutlineColor = Color3.fromRGB(255,255,255)
+        hl.FillTransparency = 0.5
+        hl.OutlineTransparency = 0
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        local ok = pcall(function() hl.Parent = game:GetService("CoreGui") end)
+        if not ok or not hl.Parent then hl.Parent = adornee end
+        table.insert(ESPItems, hl)
+        if text then
+            local bb = Instance.new("BillboardGui")
+            bb.Name = "_NF_LABEL"
+            bb.Size = UDim2.new(0, 140, 0, 28)
+            bb.StudsOffset = Vector3.new(0, 3, 0)
+            bb.AlwaysOnTop = true
+            bb.Adornee = adornee
+            bb.Parent = adornee
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(1,0,1,0)
+            lbl.BackgroundTransparency = 1
+            lbl.Text = text
+            lbl.TextColor3 = color
+            lbl.TextStrokeTransparency = 0.3
+            lbl.TextScaled = true
+            lbl.Font = Enum.Font.GothamBold
+            lbl.Parent = bb
+            table.insert(ESPItems, bb)
+        end
+    end
+
+    local function ESPLoop()
+        while NF.ItemESP or NF.EntityESP or NF.PlayerESP or NF.ChestESP or NF.ChildESP do
+            local _, hrp = GetParts()
+            if NF.ItemESP then
+                for _, it in ipairs(FindItems("all")) do
+                    if it.part and it.part.Parent and (not hrp or (hrp.Position - it.part.Position).Magnitude < NF.ESPDistance) then
+                        MakeESP(it.part, Color3.fromRGB(100,255,100), it.prompt and it.prompt.ObjectText or it.part.Name)
+                    end
+                end
+                for _, part in ipairs(FindAmmoAndCoins()) do
+                    if part and part.Parent and (not hrp or (hrp.Position - part.Position).Magnitude < NF.ESPDistance) then
+                        MakeESP(part, Color3.fromRGB(255,255,0), part.Name)
+                    end
+                end
+            end
+            if NF.EntityESP then
+                for _, e in ipairs(FindEntities()) do
+                    if e and e.Parent and not e:FindFirstChild("_NF_ESP") then
+                        local hr = e:FindFirstChild("HumanoidRootPart")
+                        if not hrp or not hr or (hrp.Position - hr.Position).Magnitude < NF.ESPDistance then
+                            MakeESP(e, Color3.fromRGB(255,50,50), e.Name)
+                        end
+                    end
+                end
+            end
+            if NF.PlayerESP then
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl ~= LocalPlayer and pl.Character and pl.Character:FindFirstChild("HumanoidRootPart") and not pl.Character:FindFirstChild("_NF_ESP") then
+                        local hr = pl.Character.HumanoidRootPart
+                        if not hrp or (hrp.Position - hr.Position).Magnitude < NF.ESPDistance then
+                            MakeESP(pl.Character, Color3.fromRGB(80,170,255), pl.Name)
+                        end
+                    end
+                end
+            end
+            if NF.ChestESP then
+                for _, ch in ipairs(FindChests()) do
+                    if ch and ch.Parent and (not hrp or (hrp.Position - ch.Position).Magnitude < NF.ESPDistance) then
+                        MakeESP(ch, Color3.fromRGB(255,165,0), "Chest")
+                    end
+                end
+            end
+            if NF.ChildESP then
+                for _, ch in ipairs(FindChildren()) do
+                    if ch and ch.Parent and (not hrp or (hrp.Position - ch.Position).Magnitude < NF.ESPDistance) then
+                        MakeESP(ch, Color3.fromRGB(0,255,255), "Child")
+                    end
+                end
+            end
+            -- prune stale
+            for i=#ESPItems,1,-1 do
+                local v = ESPItems[i]
+                if not v or not v.Parent or (v:IsA("Highlight") and v.Adornee and not v.Adornee.Parent) then
+                    pcall(function() v:Destroy() end)
+                    table.remove(ESPItems, i)
+                end
+            end
+            task.wait(1.2)
+        end
+    end
+
+    -- Env
+    local FogCache = {}
+    local function ToggleFog(v)
+        NF.DisableFog = v
+        if v then
+            FogCache.FogEnd = Lighting.FogEnd
+            FogCache.FogStart = Lighting.FogStart
+            FogCache.FogColor = Lighting.FogColor
+            Lighting.FogEnd = 100000
+            Lighting.FogStart = 0
+            Lighting.FogColor = Color3.new(1,1,1)
+        else
+            if FogCache.FogEnd then Lighting.FogEnd = FogCache.FogEnd end
+            if FogCache.FogStart then Lighting.FogStart = FogCache.FogStart end
+            if FogCache.FogColor then Lighting.FogColor = FogCache.FogColor end
+        end
+    end
+    local function ToggleFullBright(v)
+        NF.FullBright = v
+        if v then
+            Lighting.Brightness = 2
+            Lighting.ClockTime = 14
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = false
+            Lighting.OutdoorAmbient = Color3.new(1,1,1)
+        else
+            Lighting.Brightness = 1
+            Lighting.ClockTime = 14
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = true
+            Lighting.OutdoorAmbient = Color3.new(0.5,0.5,0.5)
+        end
+    end
+
+    -- TABS
+    local MainTab = Window:CreateTab("Main", 4483362458)
+    local CombatTab = Window:CreateTab("Combat", 4483362458)
+    local AutoTab = Window:CreateTab("Auto", 4483362458)
+    local TeleportTab = Window:CreateTab("Teleport", 4483362458)
+    local PlayerTab = Window:CreateTab("Player", 4483362458)
+    local ESPTab = Window:CreateTab("ESP", 4483362458)
+    local EnvTab = Window:CreateTab("Env", 4483362458)
+    local MiscTab = Window:CreateTab("Misc", 4483362458)
+
+    -- MAIN
+    MainTab:CreateSection("Survival")
+    MainTab:CreateToggle({ Name = "Auto Feed (hunger < threshold)", CurrentValue = false, Flag = "NFAutoFeedFlag",
+        Callback = function(v)
+            NF.AutoFeed=v
+            if v then task.spawn(function() while NF.AutoFeed do pcall(DoAutoFeed); task.wait(2) end end) end
+        end })
+    MainTab:CreateSlider({ Name = "Feed Threshold", Range = {20, 90}, Increment = 5, Suffix = "%", CurrentValue = 70, Flag = "NFFeedThrFlag",
+        Callback = function(v) NF.FeedThreshold=v end })
+    MainTab:CreateToggle({ Name = "Instant Interact (0 hold)", CurrentValue = false, Flag = "NFInstantFlag",
+        Callback = function(v) ToggleInstant(v) end })
+    MainTab:CreateToggle({ Name = "Auto Stun Deer (flashlight)", CurrentValue = false, Flag = "NFAutoStunFlag",
+        Callback = function(v)
+            NF.AutoStunDeer=v
+            if v then task.spawn(StunDeerLoop) end
+        end })
+    MainTab:CreateSlider({ Name = "Stun Range", Range = {20, 150}, Increment = 5, Suffix = " studs", CurrentValue = 60, Flag = "NFStunRangeFlag",
+        Callback = function(v) NF.StunRange=v end })
+    MainTab:CreateSection("Bring")
+    MainTab:CreateToggle({ Name = "Bring Aura (pull items to camp)", CurrentValue = false, Flag = "NFBringFlag",
+        Callback = function(v)
+            NF.BringAura=v
+            if v then task.spawn(function()
+                while NF.BringAura do
+                    BringItems("fuel"); task.wait(0.3)
+                    BringItems("food"); task.wait(0.3)
+                    BringItems("junk"); task.wait(0.5)
+                end
+            end) end
+        end })
+    MainTab:CreateSlider({ Name = "Bring Radius", Range = {50, 500}, Increment = 10, Suffix = " studs", CurrentValue = 150, Flag = "NFBringRadiusFlag",
+        Callback = function(v) NF.BringRadius=v end })
+    MainTab:CreateButton({ Name = "Bring All Junk to Camp", Callback = function() BringItems("junk") end })
+    MainTab:CreateButton({ Name = "Bring All Fuel to Camp", Callback = function() BringItems("fuel") end })
+    MainTab:CreateButton({ Name = "Bring All Food to Camp", Callback = function() BringItems("food") end })
+
+    -- COMBAT
+    CombatTab:CreateSection("Aura")
+    CombatTab:CreateToggle({ Name = "Kill Aura (nearest entity)", CurrentValue = false, Flag = "NFKillFlag",
+        Callback = function(v)
+            NF.KillAura=v
+            if v then task.spawn(KillAuraLoop) end
+        end })
+    CombatTab:CreateSlider({ Name = "Kill Range", Range = {10, 100}, Increment = 5, Suffix = " studs", CurrentValue = 25, Flag = "NFKillRangeFlag",
+        Callback = function(v) NF.KillRange=v end })
+    CombatTab:CreateSlider({ Name = "Kill Delay", Range = {0.05, 1}, Increment = 0.05, Suffix = "s", CurrentValue = 0.15, Flag = "NFKillDelayFlag",
+        Callback = function(v) NF.KillDelay=v end })
+    CombatTab:CreateToggle({ Name = "Chop Aura (trees)", CurrentValue = false, Flag = "NFChopFlag",
+        Callback = function(v)
+            NF.ChopAura=v
+            if v then task.spawn(ChopAuraLoop) end
+        end })
+    CombatTab:CreateSlider({ Name = "Chop Range", Range = {10, 100}, Increment = 5, Suffix = " studs", CurrentValue = 25, Flag = "NFChopRangeFlag",
+        Callback = function(v) NF.ChopRange=v end })
+
+    -- AUTO
+    AutoTab:CreateSection("Auto Collect")
+    AutoTab:CreateToggle({ Name = "Auto Collect (nearest 3)", CurrentValue = false, Flag = "NFAutoCollectFlag",
+        Callback = function(v)
+            NF.AutoCollect=v
+            if v then task.spawn(AutoCollectLoop) end
+        end })
+    AutoTab:CreateSlider({ Name = "Collect Radius", Range = {30, 400}, Increment = 10, Suffix = " studs", CurrentValue = 120, Flag = "NFCollectRadiusFlag",
+        Callback = function(v) NF.CollectRadius=v end })
+    AutoTab:CreateToggle({ Name = "Collect Coins/Ammo", CurrentValue = true, Flag = "NFCoinsFlag", Callback = function(v) NF.AutoCoins=v end })
+    AutoTab:CreateToggle({ Name = "Collect Weapons", CurrentValue = true, Flag = "NFWeaponsFlag", Callback = function(v) NF.AutoWeapons=v end })
+    AutoTab:CreateToggle({ Name = "Collect Food", CurrentValue = true, Flag = "NFFoodFlag", Callback = function(v) NF.AutoFood=v end })
+    AutoTab:CreateToggle({ Name = "Collect Fuel", CurrentValue = true, Flag = "NFFuelFlag", Callback = function(v) NF.AutoFuel=v end })
+    AutoTab:CreateSection("Campfire")
+    AutoTab:CreateToggle({ Name = "Auto Upgrade Campfire", CurrentValue = false, Flag = "NFCampfireFlag",
+        Callback = function(v)
+            NF.AutoUpgradeCampfire=v
+            if v then task.spawn(CampfireLoop) end
+        end })
+    AutoTab:CreateToggle({ Name = "Auto Cook Food", CurrentValue = false, Flag = "NFAutoCookFlag",
+        Callback = function(v) NF.AutoCook=v end })
+
+    -- TELEPORT
+    TeleportTab:CreateSection("Quick TP")
+    TeleportTab:CreateButton({ Name = "Teleport to Campfire", Callback = function() local cf=GetCampCFrame(); if cf then TeleportTo(cf + Vector3.new(0,5,0)) end end })
+    TeleportTab:CreateButton({ Name = "Teleport to Stronghold", Callback = function()
+        local best, dist = nil, math.huge
+        local _, hrp = GetParts()
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name:lower():find("stronghold") and obj:IsA("BasePart") then
+                local d = hrp and (hrp.Position - obj.Position).Magnitude or 0
+                if d < dist then dist=d; best=obj end
+            end
+        end
+        if best then TeleportTo(best.CFrame + Vector3.new(0,5,0))
+        else Rayfield:Notify({Title="Not Found", Content="Stronghold not found", Duration=2}) end
+    end })
+    TeleportTab:CreateButton({ Name = "Teleport to Nearest Child", Callback = function()
+        local _, hrp = GetParts()
+        if not hrp then return end
+        local childs = FindChildren()
+        table.sort(childs, function(a,b) return (hrp.Position - a.Position).Magnitude < (hrp.Position - b.Position).Magnitude end)
+        if #childs>0 then TeleportTo(childs[1].CFrame + Vector3.new(0,5,0))
+        else Rayfield:Notify({Title="Not Found", Content="No children found", Duration=2}) end
+    end })
+    TeleportTab:CreateButton({ Name = "Teleport to Nearest Chest", Callback = function()
+        local _, hrp = GetParts()
+        if not hrp then return end
+        local chests = FindChests()
+        table.sort(chests, function(a,b) return (hrp.Position - a.Position).Magnitude < (hrp.Position - b.Position).Magnitude end)
+        if #chests>0 then TeleportTo(chests[1].CFrame + Vector3.new(0,5,0))
+        else Rayfield:Notify({Title="Not Found", Content="No chests found", Duration=2}) end
+    end })
+    TeleportTab:CreateButton({ Name = "Teleport to Random Chest", Callback = function()
+        local chests = FindChests()
+        if #chests>0 then TeleportTo(chests[math.random(1,#chests)].CFrame + Vector3.new(0,5,0)) end
+    end })
+    TeleportTab:CreateSection("Player")
+    local PlayerDropdown = TeleportTab:CreateDropdown({ Name = "Select Player", Options = {}, CurrentOption = {}, Flag = "NFPlayerTP",
+        Callback = function(o)
+            local t = Players:FindFirstChild(o[1])
+            if t and t.Character then local tr=t.Character:FindFirstChild("HumanoidRootPart"); local _, hrp=GetParts(); if tr and hrp then hrp.CFrame = tr.CFrame + Vector3.new(0,3,0) end end
+        end })
+    local function RefreshPlayers()
+        local names={}
+        for _,p in ipairs(Players:GetPlayers()) do table.insert(names, p.Name) end
+        PlayerDropdown:Refresh(names)
+    end
+    TeleportTab:CreateButton({ Name = "Refresh Player List", Callback = RefreshPlayers })
+    TeleportTab:CreateSection("Click TP")
+    TeleportTab:CreateToggle({ Name = "Click TP (Right Click)", CurrentValue = false, Flag = "NFClickTPFlag",
+        Callback = function(v)
+            NF.ClickTP=v
+            if v then NF.Connections.ClickTP = UserInputService.InputBegan:Connect(function(input, processed)
+                if processed then return end
+                if input.UserInputType == Enum.UserInputType.MouseButton2 then
+                    local _, hrp=GetParts()
+                    if hrp then local m=LocalPlayer:GetMouse(); if m.Hit then hrp.CFrame = m.Hit + Vector3.new(0,5,0) end end
+                end
+            end) else DConn("ClickTP") end
+        end })
+
+    -- PLAYER
+    PlayerTab:CreateSection("Movement")
+    PlayerTab:CreateToggle({ Name = "Custom WalkSpeed", CurrentValue = false, Flag = "NFWalkFlag",
+        Callback = function(v) NF.WalkSpeedEnabled=v; if not v then local _,_,hum=GetParts(); if hum then hum.WalkSpeed=16 end end end })
+    PlayerTab:CreateSlider({ Name = "WalkSpeed", Range = {16, 60}, Increment = 1, Suffix = " studs/s", CurrentValue = 28, Flag = "NFWalkValFlag",
+        Callback = function(v) NF.WalkSpeedValue=v end })
+    PlayerTab:CreateToggle({ Name = "Custom JumpPower", CurrentValue = false, Flag = "NFJumpFlag",
+        Callback = function(v) NF.JumpPowerEnabled=v; if not v then local _,_,hum=GetParts(); if hum then hum.JumpPower=50 end end end })
+    PlayerTab:CreateSlider({ Name = "JumpPower", Range = {50, 300}, Increment = 5, Suffix = "", CurrentValue = 60, Flag = "NFJumpValFlag",
+        Callback = function(v) NF.JumpPowerValue=v end })
+    PlayerTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "NFInfJumpFlag",
+        Callback = function(v)
+            NF.InfiniteJump=v
+            if v then NF.Connections.InfJump = UserInputService.JumpRequest:Connect(function() if NF.InfiniteJump and IsAlive() then local _,_,hum=GetParts(); if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end end end)
+            else DConn("InfJump") end
+        end })
+    PlayerTab:CreateSection("Fly & NoClip")
+    PlayerTab:CreateToggle({ Name = "Fly (W/Space/Shift)", CurrentValue = false, Flag = "NFFlyFlag",
+        Callback = function(v)
+            NF.FlyEnabled=v
+            if v then
+                local bv,bg
+                NF.Connections.Fly = RunService.RenderStepped:Connect(function()
+                    local _,hrp,hum=GetParts()
+                    if not (hrp and hum and IsAlive()) then NF.FlyEnabled=false; if bv then bv:Destroy() end; if bg then bg:Destroy() end; DConn("Fly"); return end
+                    if not bv then
+                        bv=Instance.new("BodyVelocity"); bv.MaxForce=Vector3.new(math.huge,math.huge,math.huge); bv.Velocity=Vector3.zero; bv.Parent=hrp
+                        bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(math.huge,math.huge,math.huge); bg.P=9000; bg.D=500; bg.Parent=hrp
+                    end
+                    local md=Vector3.zero; local cam=Camera.CFrame
+                    if UserInputService:IsKeyDown(Enum.KeyCode.W) then md=md+cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.S) then md=md-cam.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.A) then md=md-cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.D) then md=md+cam.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then md=md+Vector3.new(0,1,0) end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then md=md-Vector3.new(0,1,0) end
+                    if md.Magnitude>0 then md=md.Unit*NF.FlySpeed end
+                    bv.Velocity=md; bg.CFrame=cam
+                end)
+            else
+                DConn("Fly")
+                local _,hrp=GetParts(); if hrp then for _,v in ipairs(hrp:GetChildren()) do if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then v:Destroy() end end end
+            end
+        end })
+    PlayerTab:CreateSlider({ Name = "Fly Speed", Range = {10,200}, Increment = 5, Suffix = " studs/s", CurrentValue = 60, Flag = "NFFlySpeedFlag",
+        Callback = function(v) NF.FlySpeed=v end })
+    PlayerTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "NFNoClipFlag",
+        Callback = function(v)
+            NF.NoClip=v
+            if v then NF.Connections.NoClip = RunService.Stepped:Connect(function() if not NF.NoClip then return end; local c=LocalPlayer.Character; if not c then return end; for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") and p.CanCollide then p.CanCollide=false end end end)
+            else DConn("NoClip") end
+        end })
+    PlayerTab:CreateToggle({ Name = "Bunny Hop", CurrentValue = false, Flag = "NFBHopFlag",
+        Callback = function(v)
+            NF.BHop=v
+            if v then NF.Connections.BHop = RunService.Heartbeat:Connect(function()
+                local _,hrp,hum=GetParts()
+                if NF.BHop and hrp and hum and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                    if hum.FloorMaterial ~= Enum.Material.Air then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+                end
+            end) else DConn("BHop") end
+        end })
+    PlayerTab:CreateToggle({ Name = "Infinite Stamina", CurrentValue = false, Flag = "NFStaminaFlag",
+        Callback = function(v)
+            NF.InfiniteStamina=v
+            if v then NF.Connections.Stamina = RunService.Heartbeat:Connect(function()
+                local char = LocalPlayer.Character
+                if char then
+                    local stamina = char:GetAttribute("Stamina") or LocalPlayer:GetAttribute("Stamina")
+                    if stamina then
+                        pcall(function() char:SetAttribute("Stamina", 100) end)
+                        pcall(function() LocalPlayer:SetAttribute("Stamina", 100) end)
+                    end
+                    for _, obj in ipairs(char:GetDescendants()) do
+                        if obj:IsA("NumberValue") and obj.Name:lower():find("stamina") then obj.Value = 100 end
+                    end
+                end
+            end) else DConn("Stamina") end
+        end })
+
+    -- ESP
+    ESPTab:CreateSection("Visuals")
+    ESPTab:CreateToggle({ Name = "Item ESP", CurrentValue = false, Flag = "NFItemESPFlag",
+        Callback = function(v) NF.ItemESP=v; if v then ClearESP(); task.spawn(ESPLoop) else if not NF.EntityESP and not NF.PlayerESP and not NF.ChestESP and not NF.ChildESP then ClearESP() end end end })
+    ESPTab:CreateToggle({ Name = "Entity ESP (Deer/Wolf/Cultist)", CurrentValue = false, Flag = "NFEntityESPFlag",
+        Callback = function(v) NF.EntityESP=v; if v then ClearESP(); task.spawn(ESPLoop) else if not NF.ItemESP and not NF.PlayerESP and not NF.ChestESP and not NF.ChildESP then ClearESP() end end end })
+    ESPTab:CreateToggle({ Name = "Player ESP", CurrentValue = false, Flag = "NFPlayerESPFlag",
+        Callback = function(v) NF.PlayerESP=v; if v then ClearESP(); task.spawn(ESPLoop) else if not NF.ItemESP and not NF.EntityESP and not NF.ChestESP and not NF.ChildESP then ClearESP() end end end })
+    ESPTab:CreateToggle({ Name = "Chest ESP", CurrentValue = false, Flag = "NFChestESPFlag",
+        Callback = function(v) NF.ChestESP=v; if v then ClearESP(); task.spawn(ESPLoop) else if not NF.ItemESP and not NF.EntityESP and not NF.PlayerESP and not NF.ChildESP then ClearESP() end end end })
+    ESPTab:CreateToggle({ Name = "Child ESP", CurrentValue = false, Flag = "NFChildESPFlag",
+        Callback = function(v) NF.ChildESP=v; if v then ClearESP(); task.spawn(ESPLoop) else if not NF.ItemESP and not NF.EntityESP and not NF.PlayerESP and not NF.ChestESP then ClearESP() end end end })
+    ESPTab:CreateSlider({ Name = "ESP Distance", Range = {100, 2000}, Increment = 50, Suffix = " studs", CurrentValue = 300, Flag = "NFESPDistFlag",
+        Callback = function(v) NF.ESPDistance=v end })
+    ESPTab:CreateButton({ Name = "Clear All ESP", Callback = ClearESP })
+
+    -- ENV
+    EnvTab:CreateSection("Lighting")
+    EnvTab:CreateToggle({ Name = "FullBright", CurrentValue = false, Flag = "NFFullBrightFlag",
+        Callback = function(v) ToggleFullBright(v) end })
+    EnvTab:CreateToggle({ Name = "Disable Fog", CurrentValue = false, Flag = "NFDisableFogFlag",
+        Callback = function(v) ToggleFog(v) end })
+    EnvTab:CreateToggle({ Name = "Disable Night Campfire Effect", CurrentValue = false, Flag = "NFNightEffectFlag",
+        Callback = function(v)
+            NF.DisableNightEffect=v
+            -- try to disable post effects
+            for _, obj in ipairs(Lighting:GetChildren()) do
+                if obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("SunRaysEffect") then
+                    obj.Enabled = not v
+                end
+            end
+        end })
+    EnvTab:CreateToggle({ Name = "No Deer JumpScare", CurrentValue = false, Flag = "NFNoScareFlag",
+        Callback = function(v)
+            NF.NoDeerJumpScare=v
+            if v then
+                -- try to disable deer scare gui
+                pcall(function()
+                    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+                    if pg then
+                        for _, gui in ipairs(pg:GetDescendants()) do
+                            if gui.Name:lower():find("jumpscare") or gui.Name:lower():find("scare") then
+                                gui.Enabled = false
+                            end
+                        end
+                    end
+                end)
+            end
+        end })
+
+    -- MISC
+    MiscTab:CreateSection("Position")
+    local LX = MiscTab:CreateLabel("X: 0"); local LY = MiscTab:CreateLabel("Y: 0"); local LZ = MiscTab:CreateLabel("Z: 0")
+    local FPSLabel = MiscTab:CreateLabel("FPS: -- | Ping: --")
+    do local lastTick=os.clock(); local fc=0; RunService.RenderStepped:Connect(function() fc=fc+1; if os.clock()-lastTick>=1 then local fps=math.floor(fc/(os.clock()-lastTick)); fc=0; lastTick=os.clock(); local ping="--"; pcall(function() ping=tostring(math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())).."ms" end); FPSLabel:Set(string.format("FPS: %d | Ping: %s", fps, ping)) end end) end
+    NF.Connections.PosTracker = RunService.Heartbeat:Connect(function()
+        local _, hrp=GetParts()
+        if hrp then local p=hrp.Position; LX:Set(string.format("X: %.1f", p.X)); LY:Set(string.format("Y: %.1f", p.Y)); LZ:Set(string.format("Z: %.1f", p.Z)) end
+    end)
+    MiscTab:CreateSection("Utility")
+    MiscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "NFAntiAFKFlag",
+        Callback = function(v)
+            NF.AntiAFK=v
+            if v then NF.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() task.wait(math.random()*1.2); pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(100,700), math.random(100,400))) end) end)
+            else DConn("AntiAFK") end
+        end })
+    MiscTab:CreateButton({ Name = "Redeem Codes (forestwakesup26)", Callback = function()
+        -- try to fire code redeem remote
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj:IsA("RemoteEvent") and obj.Name:lower():find("code") then
+                pcall(function() obj:FireServer("forestwakesup26") end)
+                pcall(function() obj:FireServer("afterparty") end)
+            end
+            if obj:IsA("RemoteFunction") and obj.Name:lower():find("code") then
+                pcall(function() obj:InvokeServer("forestwakesup26") end)
+            end
+        end
+        Rayfield:Notify({Title="Codes", Content="Tried forestwakesup26 + afterparty", Duration=3})
+    end })
+    MiscTab:CreateSection("Cleanup")
+    MiscTab:CreateButton({ Name = "Destroy UI", Callback = function()
+        ClearESP()
+        for name,_ in pairs(NF.Connections) do DConn(name) end
+        NF.AutoFeed=false; NF.InstantInteract=false; NF.AutoStunDeer=false; NF.AutoCollect=false; NF.AutoUpgradeCampfire=false; NF.AutoCook=false
+        NF.KillAura=false; NF.ChopAura=false; NF.BringAura=false
+        NF.ItemESP=false; NF.EntityESP=false; NF.PlayerESP=false; NF.ChestESP=false; NF.ChildESP=false
+        NF.WalkSpeedEnabled=false; NF.JumpPowerEnabled=false; NF.InfiniteJump=false; NF.NoClip=false; NF.FlyEnabled=false; NF.BHop=false; NF.InfiniteStamina=false
+        NF.DisableFog=false; NF.FullBright=false; NF.DisableNightEffect=false; NF.NoDeerJumpScare=false; NF.AntiAFK=false
+        Window:Destroy()
+    end })
+
+    -- Core loops
+    RunService.RenderStepped:Connect(function()
+        local _,_,hum=GetParts()
+        if hum then
+            if NF.WalkSpeedEnabled then hum.WalkSpeed = NF.WalkSpeedValue + (math.random()-0.5)*0.3 end
+            if NF.JumpPowerEnabled then hum.JumpPower = NF.JumpPowerValue; hum.UseJumpPower=true end
+        end
+        if NF.InfiniteStamina then
+            local char=LocalPlayer.Character
+            if char then pcall(function() char:SetAttribute("Stamina", 100) end) end
+        end
+    end)
+
+    -- Auto Feed tick
+    task.spawn(function() while task.wait(3) do if NF.AutoFeed then pcall(DoAutoFeed) end end end)
+
+    Rayfield:Notify({ Title = "OUTCOME HUB", Content = "99 Nights in the Forest loaded", Duration = 4 })
+end
+
 -- LAUNCH
 -- ══════════════════════════════════════════════════════════════
 local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/OutcomeHub.lua'
@@ -4265,6 +5246,7 @@ local function ShowHomeTab()
     HomeTab:CreateButton({ Name = "Reload as Runaways (Beta)", Callback = function() Reload("runaways") end })
     HomeTab:CreateButton({ Name = "Reload as Clean The Leaves", Callback = function() Reload("cleanleaves") end })
     HomeTab:CreateButton({ Name = "Reload as Adopt Me", Callback = function() Reload("adoptme") end })
+    HomeTab:CreateButton({ Name = "Reload as 99 Nights", Callback = function() Reload("ninetynights") end })
     HomeTab:CreateSection("Debug")
     HomeTab:CreateLabel("Executor: " .. tostring(identifyexecutor and identifyexecutor() or "unknown"))
     HomeTab:CreateLabel("Drawing: " .. tostring(Drawing ~= nil) .. " | mousemoverel: " .. tostring(mousemoverel ~= nil))
@@ -4293,6 +5275,8 @@ function LaunchGame()
         ok, err = pcall(require_CleanLeaves)
     elseif GameName == "adoptme" then
         ok, err = pcall(require_AdoptMe)
+    elseif GameName == "ninetynights" then
+        ok, err = pcall(require_NinetyNights)
     else
         Launched = false
         ShowHomeTab()
@@ -4316,7 +5300,7 @@ if not Launched then
     task.spawn(function()
         task.wait(3)
         if Launched then return end
-        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" or GameName == "hypershot" or GameName == "bloxfruits" or GameName == "runaways" or GameName == "cleanleaves" or GameName == "adoptme" then
+        if GameName == "keyboardescape" or GameName == "basketball" or GameName == "sniper" or GameName == "hypershot" or GameName == "bloxfruits" or GameName == "runaways" or GameName == "cleanleaves" or GameName == "adoptme" or GameName == "ninetynights" then
             Reload(GameName)
         end
     end)
