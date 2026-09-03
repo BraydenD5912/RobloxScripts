@@ -4252,23 +4252,32 @@ function require_OneTap()
     local VirtualUser = game:GetService("VirtualUser")
 
     local Camera = Workspace.CurrentCamera
-    -- keep Camera updated if game switches it
     Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function() Camera = Workspace.CurrentCamera end)
 
+    -- attempt to load WeaponPackets for silent aim
+    local WeaponPackets = nil
+    pcall(function()
+        WeaponPackets = require(ReplicatedStorage:WaitForChild("Common"):WaitForChild("Packets"):WaitForChild("WeaponPackets"))
+    end)
+    if not WeaponPackets then
+        pcall(function() WeaponPackets = require(ReplicatedStorage.Common.Packets.WeaponPackets) end)
+    end
+    print("[OUTCOME] OneTap WeaponPackets:", WeaponPackets and "found" or "NOT FOUND - silent aim disabled, using camera aim only")
+
     local OT = {
-        Aimbot = false, AimFOV = 90, AimTeam = false, AimWallCheck = true,
+        -- Aimbot modes: SilentAim hooks packets (invisible), CameraAim moves mouse/camera
+        SilentAim = false, SilentFOV = 350, SilentHitChance = 100, SilentTarget = "Head",
+        CameraAim = false, AimFOV = 90, AimTeam = false, AimWallCheck = true,
         AimConfig = "Legit", AimHitbox = "Head",
-        AimKey = "RMouse", -- default hold right mouse for legit peek
+        AimKey = "RMouse",
         LegitSmooth = 0.22, LegitOffset = 0.7,
         Triggerbot = false, AutoFire = false,
-        SilentAim = false, SilentHitChance = 85,
         HitboxExpander = false, HitboxSize = 4,
         ESP = false, ESPBoxes = false, ESPTracers = false, TeamESP = false,
         WalkSpeedEnabled = false, WalkSpeedValue = 20,
         InfiniteJump = false, JumpPower = 60,
         NoClip = false, FlyEnabled = false, FlySpeed = 42,
-        NoRecoil = false, BHop = false,
-        AntiAFK = false,
+        BHop = false, AntiAFK = false,
         Connections = {},
     }
 
@@ -4279,99 +4288,185 @@ function require_OneTap()
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         return char, hrp, hum
     end
-    local function IsAlive()
-        local _,_,hum = GetParts()
-        return hum and hum.Health > 0
+    local function IsAliveChar(char)
+        if not char then return false end
+        if not char:IsDescendantOf(Workspace) then return false end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return false end
+        if char:FindFirstChildOfClass("ForceField") or char:FindFirstChild("ForceField") then return false end
+        if char:GetAttribute("deployed") == false then return false end
+        -- if attribute doesn't exist, assume alive (lobby vs in-game)
+        -- but OneTap uses deployed=true only when spawned in arena
+        -- we check: if attribute exists and is not nil, then must be true
+        -- if no attribute at all, treat as alive for ESP purposes
+        return true
     end
 
-    -- Enemy detection: FFA (everyone is enemy) but respect team if enabled
-    local function GetEnemies()
-        local list = {}
-        local myTeam = LocalPlayer.Team
-        for _, pl in ipairs(Players:GetPlayers()) do
-            if pl == LocalPlayer then continue end
-            local char = pl.Character
-            if not char then continue end
-            -- tolerate missing HumanoidRootPart name variations
-            local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or char:FindFirstChildWhichIsA("BasePart")
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            -- if no humanoid, still consider if has root part (some FPS use custom)
-            if not hrp then continue end
-            if hum and hum.Health <= 0 then continue end
-            if OT.AimTeam and myTeam and pl.Team and myTeam == pl.Team then continue end
-            -- additional: skip if char is invisible (no parts)
-            if not char.Parent then continue end
-            table.insert(list, {Pl=pl, Part=hrp, Hum=hum, Char=char})
+    -- OneTap Hitbox folder structure: Character.Hitbox.Hitbox_Head etc
+    local BoneMap = {
+        ["Head"] = {"Hitbox_Head", "Head"},
+        ["Torso"] = {"Hitbox_Torso", "HumanoidRootPart", "UpperTorso", "Torso"},
+        ["Left Arm"] = {"Hitbox_Left Arm", "Left Arm", "LeftHand"},
+        ["Right Arm"] = {"Hitbox_Right Arm", "Right Arm", "RightHand"},
+        ["Left Leg"] = {"Hitbox_Left Leg", "Left Leg", "LeftFoot"},
+        ["Right Leg"] = {"Hitbox_Right Leg", "Right Leg", "RightFoot"},
+    }
+    local function FindInHitboxFolder(Character, BoneName)
+        local HitboxFolder = Character:FindFirstChild("Hitbox")
+        if HitboxFolder then
+            local Part = HitboxFolder:FindFirstChild(BoneName)
+            if Part then return Part end
         end
-        return list
+        return Character:FindFirstChild(BoneName) or Character:FindFirstChild(BoneName, true)
+    end
+    local function GetTargetPart(Character, targetName)
+        targetName = targetName or OT.AimHitbox
+        if targetName == "Random" then
+            local ValidParts = {}
+            for _, BoneList in pairs(BoneMap) do
+                for _, BoneName in ipairs(BoneList) do
+                    local Part = FindInHitboxFolder(Character, BoneName)
+                    if Part then table.insert(ValidParts, Part); break end
+                end
+            end
+            if #ValidParts > 0 then return ValidParts[math.random(1, #ValidParts)] end
+            return nil
+        end
+        local BoneList = BoneMap[targetName] or BoneMap["Head"]
+        for _, BoneName in ipairs(BoneList) do
+            local Part = FindInHitboxFolder(Character, BoneName)
+            if Part then return Part end
+        end
+        -- fallback: any BasePart with head in name
+        for _, ch in ipairs(Character:GetDescendants()) do
+            if ch:IsA("BasePart") and ch.Name:lower():find("head") then return ch end
+        end
+        return Character:FindFirstChild("HumanoidRootPart")
     end
 
-    local function GetTargetPoint(char)
-        local part
-        if OT.AimHitbox == "Head" then
-            part = char:FindFirstChild("Head") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
-        elseif OT.AimHitbox == "Body" then
-            part = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
-        else
-            part = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Head")
-        end
-        -- try case-insensitive fallback
-        if not part then
-            for _, ch in ipairs(char:GetChildren()) do
-                if ch:IsA("BasePart") and (ch.Name:lower():find("head") or ch.Name:lower():find("torso") or ch.Name:lower():find("root")) then
-                    part = ch; break
+    local function IsVisible(FromPosition, Character, TargetPart)
+        local Direction = (TargetPart.Position - FromPosition).Unit
+        local Distance = (TargetPart.Position - FromPosition).Magnitude
+        local Params = RaycastParams.new()
+        Params.FilterType = Enum.RaycastFilterType.Exclude
+        local MyChar = LocalPlayer.Character
+        local Effects = Workspace:FindFirstChild("Effects")
+        local FilterList = {}
+        if MyChar then table.insert(FilterList, MyChar) end
+        if Effects then table.insert(FilterList, Effects) end
+        Params.FilterDescendantsInstances = FilterList
+        local RayResult = Workspace:Raycast(FromPosition, Direction * Distance, Params)
+        if not RayResult then return true end
+        local HitModel = RayResult.Instance:FindFirstAncestorWhichIsA("Model")
+        return HitModel == Character
+    end
+
+    local function ShouldTargetPlayer(Player)
+        if Player == LocalPlayer then return false end
+        local Character = Player.Character
+        if not Character then return false end
+        if not IsAliveChar(Character) then return false end
+        if OT.AimTeam and LocalPlayer.Team and Player.Team and LocalPlayer.Team == Player.Team then return false end
+        return true
+    end
+
+    local function GetNearestTarget(FOVRadius, targetBone)
+        local BestTarget, BestPart, BestDist = nil, nil, math.huge
+        if not Camera then return nil, nil end
+        local ViewportSize = Camera.ViewportSize
+        local ScreenCenter = Vector2.new(ViewportSize.X / 2, ViewportSize.Y / 2)
+        local MyChar = LocalPlayer.Character
+        local MyHead = MyChar and (MyChar:FindFirstChild("Head") or MyChar:FindFirstChild("HumanoidRootPart"))
+        if not MyHead then return nil, nil end
+        for _, Player in ipairs(Players:GetPlayers()) do
+            if ShouldTargetPlayer(Player) then
+                local Character = Player.Character
+                local HitPart = GetTargetPart(Character, targetBone)
+                if HitPart then
+                    local ScreenPos, OnScreen = Camera:WorldToViewportPoint(HitPart.Position)
+                    if OnScreen then
+                        local Dist = (Vector2.new(ScreenPos.X, ScreenPos.Y) - ScreenCenter).Magnitude
+                        if Dist < FOVRadius and Dist < BestDist then
+                            if not OT.AimWallCheck or IsVisible(MyHead.Position, Character, HitPart) then
+                                BestDist = Dist
+                                BestTarget = Character
+                                BestPart = HitPart
+                            end
+                        end
+                    end
                 end
             end
         end
-        if part then return part.Position + Vector3.new(0, 0.15, 0) end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then return hrp.Position + Vector3.new(0, 1.5, 0) end
-        -- last resort: char pivot
-        local ok, cf = pcall(function() return char:GetPivot() end)
-        if ok and cf then return cf.Position + Vector3.new(0, 1.5, 0) end
-        return Vector3.zero
+        return BestTarget, BestPart
     end
 
-    local function IsVisible(from, to)
-        if not OT.AimWallCheck then return true end
-        local params = RaycastParams.new()
-        params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        local dir = to - from
-        local result = Workspace:Raycast(from, dir, params)
-        if not result then return true end
-        -- if ray hits terrain or map wall first, not visible
-        -- if hit is descendant of any player character, consider visible (hits player)
-        for _, e in ipairs(GetEnemies()) do
-            if result.Instance:IsDescendantOf(e.Char) then return true end
+    -- Silent Aim hook (based on working reference: WeaponPackets.useWeapon.send)
+    local OriginalSend = nil
+    local SilentHooked = false
+    local function EnsureSilentHook()
+        if SilentHooked then return true end
+        if not WeaponPackets or not WeaponPackets.useWeapon or not WeaponPackets.useWeapon.send then
+            print("[OUTCOME] OneTap SilentAim: WeaponPackets not found, cannot hook")
+            return false
         end
-        -- also allow if hit is nil? else blocked
-        -- check if hit is close to target (within 3 studs, might be wall edge)
-        -- for FFA, any hit that is not terrain but close to target is considered visible
-        return false
-    end
-
-    local function PickTarget(camPos, camLook, fov)
-        local best, bestScore = nil, math.huge
-        for _, e in ipairs(GetEnemies()) do
-            local pos = GetTargetPoint(e.Char)
-            local toTarget = pos - camPos
-            local dist = toTarget.Magnitude
-            if dist < 0.5 then continue end
-            local dir = toTarget / dist
-            local ang = math.deg(math.acos(math.clamp(camLook:Dot(dir), -1, 1)))
-            if ang <= fov then
-                if not IsVisible(camPos, pos) and OT.AimConfig ~= "Rage" then continue end
-                local score = ang + dist * 0.015
-                if score < bestScore then bestScore = score; best = e end
+        OriginalSend = WeaponPackets.useWeapon.send
+        WeaponPackets.useWeapon.send = function(Data)
+            if OT.SilentAim and Data and Data.origin then
+                -- roll hit chance
+                local roll = OT.SilentHitChance >= 100 or math.random(1,100) <= OT.SilentHitChance
+                if roll then
+                    local TargetChar, TargetPart = GetNearestTarget(OT.SilentFOV, OT.SilentTarget)
+                    if TargetChar and TargetPart then
+                        Data.hitResult = TargetChar
+                        Data.hitPart = TargetPart
+                        Data.position = TargetPart.Position
+                        pcall(function() Data.direction = (TargetPart.Position - Data.origin).Unit end)
+                    end
+                end
             end
+            return OriginalSend(Data)
         end
-        return best
+        SilentHooked = true
+        print("[OUTCOME] OneTap SilentAim hooked, FOV=" .. OT.SilentFOV)
+        return true
     end
 
+    local function DisableSilentHook()
+        if SilentHooked and OriginalSend and WeaponPackets and WeaponPackets.useWeapon then
+            WeaponPackets.useWeapon.send = OriginalSend
+            SilentHooked = false
+            print("[OUTCOME] OneTap SilentAim unhooked")
+        end
+    end
+
+    -- FOV Circle + Target Dot (from reference)
+    local FOVCircle = nil
+    local TargetDot = nil
+    pcall(function()
+        if Drawing then
+            FOVCircle = Drawing.new("Circle")
+            FOVCircle.Thickness = 1.3
+            FOVCircle.NumSides = 64
+            FOVCircle.Filled = false
+            FOVCircle.Transparency = 0.65
+            FOVCircle.Color = Color3.fromRGB(255, 60, 60)
+            FOVCircle.Visible = false
+            FOVCircle.Radius = 120
+
+            TargetDot = Drawing.new("Circle")
+            TargetDot.Thickness = 1
+            TargetDot.NumSides = 16
+            TargetDot.Filled = true
+            TargetDot.Radius = 4
+            TargetDot.Color = Color3.fromRGB(255, 60, 60)
+            TargetDot.Visible = false
+        end
+    end)
+
+    -- Camera Aimbot (legit/rage mousemoverel) - alternative to silent aim
     local hasMMRel = (mousemoverel ~= nil)
     local hasMMAbs = (mousemoveabs ~= nil)
-    print("[OUTCOME] One Tap aim: mousemoverel=" .. tostring(hasMMRel) .. " mousemoveabs=" .. tostring(hasMMAbs))
+    print("[OUTCOME] One Tap camera aim: mousemoverel=" .. tostring(hasMMRel) .. " silent=" .. tostring(WeaponPackets~=nil))
 
     local function MoveMouseToward(cam, worldPos, smoothT, offsetX, offsetY)
         local sp, onScreen = cam:WorldToScreenPoint(worldPos)
@@ -4379,52 +4474,28 @@ function require_OneTap()
         local mp = UserInputService:GetMouseLocation()
         local dx, dy = (sp.X + (offsetX or 0)) - mp.X, (sp.Y + (offsetY or 0)) - mp.Y
         local t = math.clamp(smoothT, 0.05, 1)
-        if hasMMRel then
-            mousemoverel(dx * t, dy * t)
-        elseif hasMMAbs then
-            mousemoveabs(sp.X + (offsetX or 0), sp.Y + (offsetY or 0))
-        end
+        if hasMMRel then mousemoverel(dx * t, dy * t)
+        elseif hasMMAbs then mousemoveabs(sp.X + (offsetX or 0), sp.Y + (offsetY or 0)) end
     end
 
-    -- FOV Circle
-    local FOVCircle = nil
-    pcall(function()
-        if Drawing then
-            FOVCircle = Drawing.new("Circle")
-            FOVCircle.Visible = false
-            FOVCircle.Radius = OT.AimFOV * 4.5
-            FOVCircle.Color = Color3.fromRGB(255, 255, 255)
-            FOVCircle.Thickness = 1.3
-            FOVCircle.Transparency = 0.65
-            FOVCircle.Filled = false
-            FOVCircle.NumSides = 64
-            RunService.RenderStepped:Connect(function()
-                if not OT.Aimbot or OT.AimConfig ~= "Legit" then FOVCircle.Visible=false; return end
-                local cam = Workspace.CurrentCamera
-                if not cam then return end
-                FOVCircle.Visible = true
-                FOVCircle.Position = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
-                FOVCircle.Radius = math.clamp(OT.AimFOV * 4.8, 25, 500)
-            end)
-        end
-    end)
-
     local firingLock = false
-    local function AimbotLoop()
-        while OT.Aimbot do
+    local function CameraAimLoop()
+        while OT.CameraAim do
             task.wait()
-            if not OT.Aimbot then break end
+            if not OT.CameraAim then break end
             local cam = Workspace.CurrentCamera
-            if not cam then break end
+            if not cam then continue end
             local myC, myHrp = GetParts()
-            if not (myC and myHrp) or not IsAlive() then continue end
-            local wantShoot = Util.IsHeld(OT.AimKey) or OT.Triggerbot
+            if not (myC and myHrp) or not IsAliveChar(myC) then continue end
+            local wantShoot = OT.Triggerbot or Util.IsHeld(OT.AimKey)
             if not wantShoot then continue end
-            local fov = (OT.AimConfig == "Rage") and 360 or OT.AimFOV
-            local camPos, camLook = cam.CFrame.Position, cam.CFrame.LookVector
-            local best = PickTarget(camPos, camLook, fov)
-            if best then
-                local tp = GetTargetPoint(best.Char)
+            local fov = (OT.AimConfig == "Rage") and 2000 or OT.SilentFOV
+            -- for camera aim we use AimFOV
+            fov = (OT.AimConfig == "Rage") and 2000 or OT.AimFOV
+            -- reuse GetNearestTarget with AimHitbox
+            local targetChar, targetPart = GetNearestTarget(fov, OT.AimHitbox)
+            if targetChar and targetPart then
+                local tp = targetPart.Position
                 if OT.AimConfig == "Rage" then
                     local sp, onScreen = cam:WorldToScreenPoint(tp)
                     if onScreen and sp.Z >= 0 then
@@ -4434,7 +4505,7 @@ function require_OneTap()
                         elseif hasMMAbs then
                             mousemoveabs(sp.X, sp.Y)
                         else
-                            cam.CFrame = CFrame.lookAt(camPos, tp)
+                            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, tp)
                         end
                     end
                 else
@@ -4443,7 +4514,7 @@ function require_OneTap()
                     if hasMMRel or hasMMAbs then
                         MoveMouseToward(cam, tp, OT.LegitSmooth, missX, missY)
                     else
-                        local newLook = CFrame.lookAt(camPos, tp)
+                        local newLook = CFrame.lookAt(cam.CFrame.Position, tp)
                         local t = math.clamp(OT.LegitSmooth, 0.05, 1)
                         cam.CFrame = cam.CFrame:Lerp(newLook, t)
                     end
@@ -4460,42 +4531,68 @@ function require_OneTap()
         end
     end
 
-    -- Hitbox Expander
+    -- Hitbox Expander using Hitbox folder
     local OriginalSizes = {}
     local function SetHitboxes(on)
-        for _, e in ipairs(GetEnemies()) do
-            local char = e.Char
-            local head = char:FindFirstChild("Head")
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            local target = (OT.AimHitbox == "Head" and head) or hrp
-            if not target then continue end
-            if on then
-                if not OriginalSizes[target] then
-                    OriginalSizes[target] = {Size=target.Size, Transparency=target.Transparency}
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl == LocalPlayer then continue end
+            local char = pl.Character
+            if not char then continue end
+            local hitboxFolder = char:FindFirstChild("Hitbox")
+            local targets = {}
+            if hitboxFolder then
+                for _, part in ipairs(hitboxFolder:GetChildren()) do
+                    if part:IsA("BasePart") then table.insert(targets, part) end
                 end
-                target.Size = Vector3.new(OT.HitboxSize, OT.HitboxSize, OT.HitboxSize)
-                target.Transparency = 0.7
-                target.CanCollide = false
             else
-                local orig = OriginalSizes[target]
-                if orig then
-                    target.Size = orig.Size
-                    target.Transparency = orig.Transparency
+                local head = char:FindFirstChild("Head")
+                if head then table.insert(targets, head) end
+            end
+            for _, part in ipairs(targets) do
+                if on then
+                    if not OriginalSizes[part] then
+                        OriginalSizes[part] = {Size=part.Size, Transparency=part.Transparency}
+                    end
+                    -- expand
+                    part.Size = Vector3.new(OT.HitboxSize, OT.HitboxSize, OT.HitboxSize)
+                    part.Transparency = 0.7
+                    part.CanCollide = false
+                    if part:FindFirstChild("Mesh") then part.Mesh:Destroy() end
+                else
+                    local orig = OriginalSizes[part]
+                    if orig then
+                        part.Size = orig.Size
+                        part.Transparency = orig.Transparency
+                    end
                 end
             end
         end
         if not on then OriginalSizes = {} end
     end
 
-    -- ESP
+    -- ESP - use Highlight with deployed check
     local ESPItems = {}
     local function ClearESP()
         for _, v in ipairs(ESPItems) do pcall(function() v:Destroy() end) end
         ESPItems = {}
+        -- also clean highlights parented to CoreGui
+        pcall(function()
+            for _, obj in ipairs(game:GetService("CoreGui"):GetChildren()) do
+                if obj.Name == "_OT_ESP" then obj:Destroy() end
+            end
+        end)
+        -- character highlights
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl.Character then
+                local h = pl.Character:FindFirstChild("_OT_ESP")
+                if h then h:Destroy() end
+            end
+        end
     end
     local function MakeHighlight(pl, color)
         local c = pl.Character
         if not c then return end
+        if not IsAliveChar(c) then return end
         if c:FindFirstChild("_OT_ESP") then return end
         if #ESPItems >= 30 then
             local old = table.remove(ESPItems, 1)
@@ -4509,51 +4606,55 @@ function require_OneTap()
         hl.FillTransparency = 0.35
         hl.OutlineTransparency = 0
         hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        -- try CoreGui for visibility, fallback to character
         local ok = pcall(function() hl.Parent = game:GetService("CoreGui") end)
         if not ok or not hl.Parent then hl.Parent = c end
-        ESPItems[#ESPItems+1] = hl
-        -- Billboard name
-        local hrp = c:FindFirstChild("HumanoidRootPart")
+        table.insert(ESPItems, hl)
+        -- Billboard name + distance
+        local hrp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head") or c:FindFirstChildWhichIsA("BasePart")
         if hrp then
             local bb = Instance.new("BillboardGui")
             bb.Name = "_OT_LABEL"
-            bb.Size = UDim2.new(0, 120, 0, 22)
+            bb.Size = UDim2.new(0, 130, 0, 24)
             bb.StudsOffset = Vector3.new(0, 3.5, 0)
             bb.AlwaysOnTop = true
             bb.Adornee = hrp
             bb.Parent = hrp
+            local _, myHrp = GetParts()
+            local dist = myHrp and math.floor((hrp.Position - myHrp.Position).Magnitude) or 0
             local lbl = Instance.new("TextLabel")
             lbl.Size = UDim2.new(1,0,1,0)
             lbl.BackgroundTransparency = 1
-            lbl.Text = pl.Name .. " [" .. math.floor((hrp.Position - (GetParts())).Magnitude) .. "m]"
+            lbl.Text = pl.Name .. " [" .. dist .. "m]"
             lbl.TextColor3 = color
             lbl.TextStrokeTransparency = 0.3
             lbl.TextScaled = true
             lbl.Font = Enum.Font.GothamBold
             lbl.Parent = bb
-            ESPItems[#ESPItems+1] = bb
+            table.insert(ESPItems, bb)
         end
     end
+
     local function ESPLoop()
         while OT.ESP do
             local existing = {}
             for _, v in ipairs(ESPItems) do if v:IsA("Highlight") and v.Adornee then existing[v.Adornee] = true end end
             for _, pl in ipairs(Players:GetPlayers()) do
                 if pl ~= LocalPlayer and pl.Character and not existing[pl.Character] then
-                    local isEnemy = true
-                    if OT.TeamESP and LocalPlayer.Team and pl.Team and LocalPlayer.Team == pl.Team then isEnemy=false end
-                    if isEnemy then
-                        local color = isEnemy and Color3.fromRGB(255,60,60) or Color3.fromRGB(80,170,255)
-                        MakeHighlight(pl, color)
+                    if IsAliveChar(pl.Character) then
+                        local isEnemy = true
+                        if OT.TeamESP and LocalPlayer.Team and pl.Team and LocalPlayer.Team == pl.Team then isEnemy=false end
+                        if isEnemy then
+                            local color = Color3.fromRGB(255,60,60)
+                            MakeHighlight(pl, color)
+                        end
                     end
                 end
             end
-            task.wait(1.2)
-            -- prune stale where char gone
+            task.wait(1.0)
+            -- prune stale
             for i=#ESPItems,1,-1 do
                 local v = ESPItems[i]
-                if not v or not v.Parent or (v.Adornee and not v.Adornee.Parent) then
+                if not v or not v.Parent or (v:IsA("Highlight") and v.Adornee and not v.Adornee.Parent) or (v:IsA("BillboardGui") and v.Adornee and not v.Adornee.Parent) then
                     pcall(function() v:Destroy() end)
                     table.remove(ESPItems, i)
                 end
@@ -4571,13 +4672,17 @@ function require_OneTap()
             local cam = Workspace.CurrentCamera
             if cam then
                 local center = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y)
-                for _, e in ipairs(GetEnemies()) do
-                    local pos, onScreen = cam:WorldToScreenPoint(e.Part.Position)
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl == LocalPlayer then continue end
+                    if not IsAliveChar(pl.Character) then continue end
+                    local part = GetTargetPart(pl.Character, "Head")
+                    if not part then continue end
+                    local pos, onScreen = cam:WorldToViewportPoint(part.Position)
                     if onScreen then
                         local line = Drawing.new("Line")
                         line.From = center
                         line.To = Vector2.new(pos.X, pos.Y)
-                        line.Color = Color3.fromRGB(255,255,255)
+                        line.Color = Color3.fromRGB(255,60,60)
                         line.Thickness = 1.2
                         line.Transparency = 0.6
                         line.Visible = true
@@ -4585,29 +4690,11 @@ function require_OneTap()
                     end
                 end
             end
-            task.wait(0.15)
+            task.wait(0.12)
         end
         ClearTracers()
     end
 
-    -- NoRecoil (simple: reset camera recoil by hooking)
-    local NoRecoilConn = nil
-    local function ToggleNoRecoil(v)
-        OT.NoRecoil = v
-        if v then
-            -- hook: watch Camera CFrame for sudden pitch and damp it
-            local lastCFrame = Camera.CFrame
-            NoRecoilConn = RunService.RenderStepped:Connect(function()
-                if not OT.NoRecoil then return end
-                -- dampen vertical recoil by 60%
-                -- (game-specific recoil patterns vary; this is generic)
-            end)
-        else
-            if NoRecoilConn then NoRecoilConn:Disconnect(); NoRecoilConn=nil end
-        end
-    end
-
-    -- Movement lazy conns
     local function EnsureBHop()
         if OT.Connections.BHop then return end
         OT.Connections.BHop = RunService.Heartbeat:Connect(function()
@@ -4615,6 +4702,44 @@ function require_OneTap()
             local _,hrp,hum=GetParts()
             if hrp and hum and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
                 if hum.FloorMaterial ~= Enum.Material.Air then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+            end
+        end)
+    end
+
+    -- Render loop for FOVCircle + TargetDot (silent aim visual)
+    if FOVCircle and TargetDot then
+        RunService.RenderStepped:Connect(function()
+            local cam = Workspace.CurrentCamera
+            if not cam then return end
+            local ScreenCenter = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
+            -- FOV circle follows SilentAim FOV when silent enabled, else CameraAim FOV
+            local showFOV = (OT.SilentAim and OT.SilentFOV) or (OT.CameraAim and OT.AimFOV)
+            local fovVal = OT.SilentAim and OT.SilentFOV or OT.AimFOV
+            local show = (OT.SilentAim or OT.CameraAim) and (OT.AimConfig == "Legit" or OT.SilentAim)
+            if show and FOVCircle then
+                FOVCircle.Position = ScreenCenter
+                FOVCircle.Radius = math.clamp(fovVal, 25, 800)
+                FOVCircle.Visible = true
+                FOVCircle.Color = OT.SilentAim and Color3.fromRGB(255,60,60) or Color3.fromRGB(255,255,255)
+            else
+                if FOVCircle then FOVCircle.Visible = false end
+            end
+            -- Target dot follows nearest silent target
+            if (OT.SilentAim or OT.CameraAim) and TargetDot then
+                local _, part = GetNearestTarget(fovVal, OT.SilentAim and OT.SilentTarget or OT.AimHitbox)
+                if part then
+                    local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+                    if onScreen then
+                        TargetDot.Position = Vector2.new(sp.X, sp.Y)
+                        TargetDot.Visible = true
+                    else
+                        TargetDot.Visible = false
+                    end
+                else
+                    TargetDot.Visible = false
+                end
+            else
+                if TargetDot then TargetDot.Visible = false end
             end
         end)
     end
@@ -4627,12 +4752,34 @@ function require_OneTap()
 
     AimTab:CreateSection("WARNING")
     AimTab:CreateLabel("One Tap PERMABANS — use on ALT / PRIVATE SERVER only!")
-    AimTab:CreateLabel("V3: visibility-checked + FOV-limited + jittered")
+    AimTab:CreateLabel("SilentAim hooks WeaponPackets (invisible). CameraAim moves mouse.")
 
-    AimTab:CreateSection("Aimbot")
-    AimTab:CreateToggle({ Name = "Aimbot (hold key)", CurrentValue = false, Flag = "OT_AimFlag",
-        Callback = function(v) OT.Aimbot=v; if v then task.spawn(AimbotLoop) end end })
-    AimTab:CreateDropdown({ Name = "Hold Key for Aimbot", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Button 3","Mouse Button 4","Mouse Button 5"},
+    AimTab:CreateSection("Silent Aim (Packet Hook - Recommended)")
+    AimTab:CreateToggle({ Name = "Silent Aim (invisible)", CurrentValue = false, Flag = "OT_SilentFlag",
+        Callback = function(v)
+            OT.SilentAim = v
+            if v then
+                if EnsureSilentHook() then
+                    Rayfield:Notify({Title="Silent Aim", Content="Hooked WeaponPackets - FOV " .. OT.SilentFOV, Duration=2})
+                else
+                    Rayfield:Notify({Title="Silent Aim", Content="FAILED: WeaponPackets not found", Duration=3})
+                    OT.SilentAim = false
+                end
+            else
+                -- keep hook but disabled via flag (no unhook needed, just flag check)
+            end
+        end })
+    AimTab:CreateSlider({ Name = "Silent FOV", Range = {50, 2000}, Increment = 10, Suffix = "", CurrentValue = 350, Flag = "OT_SilentFOVFlag",
+        Callback = function(v) OT.SilentFOV = v; if FOVCircle then FOVCircle.Radius = v end end })
+    AimTab:CreateSlider({ Name = "Hit Chance %", Range = {10, 100}, Increment = 5, Suffix = "%", CurrentValue = 100, Flag = "OT_HitChanceFlag",
+        Callback = function(v) OT.SilentHitChance = v end })
+    AimTab:CreateDropdown({ Name = "Silent Target Bone", Options = {"Head","Torso","Random"}, CurrentOption = {"Head"}, Flag = "OT_SilentBoneFlag",
+        Callback = function(o) OT.SilentTarget = o[1] end })
+
+    AimTab:CreateSection("Camera Aimbot (Visible)")
+    AimTab:CreateToggle({ Name = "Camera Aimbot (hold key)", CurrentValue = false, Flag = "OT_AimFlag",
+        Callback = function(v) OT.CameraAim=v; if v then task.spawn(CameraAimLoop) end end })
+    AimTab:CreateDropdown({ Name = "Hold Key", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Button 3","Mouse Button 4","Mouse Button 5"},
         CurrentOption = {"Right Mouse"}, Flag = "OT_AimKeyFlag",
         Callback = function(o)
             local lbl=o[1]
@@ -4641,26 +4788,26 @@ function require_OneTap()
         end })
     AimTab:CreateToggle({ Name = "Triggerbot (aim while idle)", CurrentValue = false, Flag = "OT_TriggerFlag",
         Callback = function(v) OT.Triggerbot=v end })
-    AimTab:CreateToggle({ Name = "Auto Fire (shoot when locked)", CurrentValue = false, Flag = "OT_AutoFireFlag",
+    AimTab:CreateToggle({ Name = "Auto Fire", CurrentValue = false, Flag = "OT_AutoFireFlag",
         Callback = function(v) OT.AutoFire=v end })
-    AimTab:CreateSection("Config")
-    AimTab:CreateDropdown({ Name = "Aimbot Config", Options = {"Legit","Rage"}, CurrentOption = {"Legit"}, Flag = "OT_AimConfigFlag",
+    AimTab:CreateSection("Camera Config")
+    AimTab:CreateDropdown({ Name = "Camera Config", Options = {"Legit","Rage"}, CurrentOption = {"Legit"}, Flag = "OT_AimConfigFlag",
         Callback = function(o) OT.AimConfig=o[1] end })
-    AimTab:CreateDropdown({ Name = "Hitbox", Options = {"Head","Body"}, CurrentOption = {"Head"}, Flag = "OT_HitboxFlag",
+    AimTab:CreateDropdown({ Name = "Camera Hitbox", Options = {"Head","Torso"}, CurrentOption = {"Head"}, Flag = "OT_HitboxFlag",
         Callback = function(o) OT.AimHitbox=o[1] end })
-    AimTab:CreateSlider({ Name = "Aimbot FOV (Legit)", Range = {5, 160}, Increment = 1, Suffix = " deg", CurrentValue = 90, Flag = "OT_FOVFlag",
+    AimTab:CreateSlider({ Name = "Camera FOV (Legit)", Range = {5, 800}, Increment = 5, Suffix = "", CurrentValue = 90, Flag = "OT_FOVFlag",
         Callback = function(v) OT.AimFOV=v end })
-    AimTab:CreateSlider({ Name = "Aim Smoothness", Range = {0.05, 1}, Increment = 0.01, Suffix = "", CurrentValue = 0.22, Flag = "OT_SmoothFlag",
+    AimTab:CreateSlider({ Name = "Smoothness", Range = {0.05, 1}, Increment = 0.01, Suffix = "", CurrentValue = 0.22, Flag = "OT_SmoothFlag",
         Callback = function(v) OT.LegitSmooth=v end })
-    AimTab:CreateSlider({ Name = "Human Miss Offset (studs)", Range = {0, 3}, Increment = 0.1, Suffix = "", CurrentValue = 0.7, Flag = "OT_OffsetFlag",
+    AimTab:CreateSlider({ Name = "Human Miss Offset", Range = {0, 3}, Increment = 0.1, Suffix = "", CurrentValue = 0.7, Flag = "OT_OffsetFlag",
         Callback = function(v) OT.LegitOffset=v end })
-    AimTab:CreateToggle({ Name = "Wall Check (visible only, legit)", CurrentValue = true, Flag = "OT_WallCheckFlag",
+    AimTab:CreateToggle({ Name = "Wall Check", CurrentValue = true, Flag = "OT_WallCheckFlag",
         Callback = function(v) OT.AimWallCheck=v end })
-    AimTab:CreateToggle({ Name = "Enemies Only (team check)", CurrentValue = false, Flag = "OT_TeamFlag",
+    AimTab:CreateToggle({ Name = "Team Check (FFA off)", CurrentValue = false, Flag = "OT_TeamFlag",
         Callback = function(v) OT.AimTeam=v end })
 
     AimTab:CreateSection("Hitbox")
-    AimTab:CreateToggle({ Name = "Hitbox Expander", CurrentValue = false, Flag = "OT_HitboxFlag2",
+    AimTab:CreateToggle({ Name = "Hitbox Expander (Hitbox folder)", CurrentValue = false, Flag = "OT_HitboxFlag2",
         Callback = function(v) OT.HitboxExpander=v; if v then
             OT.Connections.Hitbox = RunService.Heartbeat:Connect(function() if OT.HitboxExpander then SetHitboxes(true) end end)
         else
@@ -4668,6 +4815,24 @@ function require_OneTap()
         end end })
     AimTab:CreateSlider({ Name = "Hitbox Size", Range = {2, 10}, Increment = 0.5, Suffix = " studs", CurrentValue = 4, Flag = "OT_HitboxSizeFlag",
         Callback = function(v) OT.HitboxSize=v end })
+    AimTab:CreateButton({ Name = "Debug: Print Target Info", Callback = function()
+        local char, part = GetNearestTarget(OT.SilentAim and OT.SilentFOV or OT.AimFOV, OT.SilentTarget)
+        if char and part then
+            print("[OUTCOME] Nearest:", char.Name, part.Name, part.Position)
+            Rayfield:Notify({Title="Target", Content=char.Name.." -> "..part.Name, Duration=2})
+        else
+            print("[OUTCOME] No target found - check FOV/WallCheck/deployed")
+            Rayfield:Notify({Title="No Target", Content="No target in FOV or not visible (check deployed)", Duration=2})
+        end
+        -- also dump character structure
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= LocalPlayer and pl.Character then
+                print("Player", pl.Name, "deployed", pl.Character:GetAttribute("deployed"), "children", #pl.Character:GetChildren())
+                local hb = pl.Character:FindFirstChild("Hitbox")
+                if hb then print(" Hitbox children:", #hb:GetChildren()) end
+            end
+        end
+    end })
 
     -- Visuals
     VisualTab:CreateSection("ESP")
@@ -4675,9 +4840,12 @@ function require_OneTap()
         Callback = function(v) OT.ESP=v; if v then ClearESP(); task.spawn(ESPLoop) else ClearESP() end end })
     VisualTab:CreateToggle({ Name = "Box Tracers (Drawing)", CurrentValue = false, Flag = "OT_TracerFlag",
         Callback = function(v) OT.ESPTracers=v; if v then task.spawn(TracerLoop) else ClearTracers() end end })
-    VisualTab:CreateToggle({ Name = "Show Teammates (blue)", CurrentValue = false, Flag = "OT_TeamESPFlag2",
+    VisualTab:CreateToggle({ Name = "Show Teammates", CurrentValue = false, Flag = "OT_TeamESPFlag2",
         Callback = function(v) OT.TeamESP=v end })
     VisualTab:CreateButton({ Name = "Clear ESP / Tracers", Callback = function() ClearESP(); ClearTracers() end })
+    VisualTab:CreateButton({ Name = "Debug: Force ESP on all", Callback = function()
+        for _, pl in ipairs(Players:GetPlayers()) do if pl~=LocalPlayer and pl.Character then MakeHighlight(pl, Color3.fromRGB(255,0,255)) end end
+    end })
 
     -- Player
     PlayerTab:CreateSection("Movement")
@@ -4688,7 +4856,7 @@ function require_OneTap()
     PlayerTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "OT_InfJumpFlag",
         Callback = function(v)
             OT.InfiniteJump=v
-            if v then OT.Connections.InfJump = UserInputService.JumpRequest:Connect(function() if OT.InfiniteJump and IsAlive() then local _,_,hum=GetParts(); if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end end end)
+            if v then OT.Connections.InfJump = UserInputService.JumpRequest:Connect(function() if OT.InfiniteJump then local _,_,hum=GetParts(); if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end end end)
             else DConn("InfJump") end
         end })
     PlayerTab:CreateToggle({ Name = "Bunny Hop (hold Space)", CurrentValue = false, Flag = "OT_BHopFlag",
@@ -4706,7 +4874,7 @@ function require_OneTap()
                 local bv,bg
                 OT.Connections.Fly = RunService.RenderStepped:Connect(function()
                     local _,hrp,hum=GetParts()
-                    if not (hrp and hum and IsAlive()) then OT.FlyEnabled=false; if bv then bv:Destroy() end; if bg then bg:Destroy() end; DConn("Fly"); return end
+                    if not (hrp and hum) or hum.Health<=0 then OT.FlyEnabled=false; if bv then bv:Destroy() end; if bg then bg:Destroy() end; DConn("Fly"); return end
                     if not bv then
                         bv=Instance.new("BodyVelocity"); bv.MaxForce=Vector3.new(math.huge,math.huge,math.huge); bv.Velocity=Vector3.zero; bv.Parent=hrp
                         bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(math.huge,math.huge,math.huge); bg.P=9000; bg.D=500; bg.Parent=hrp
@@ -4741,8 +4909,10 @@ function require_OneTap()
     MiscTab:CreateButton({ Name = "Destroy UI", Callback = function()
         ClearESP(); ClearTracers()
         for name,_ in pairs(OT.Connections) do DConn(name) end
-        if NoRecoilConn then NoRecoilConn:Disconnect() end
-        OT.Aimbot=false; OT.ESP=false; OT.ESPTracers=false; OT.WalkSpeedEnabled=false; OT.InfiniteJump=false; OT.NoClip=false; OT.FlyEnabled=false; OT.BHop=false; OT.HitboxExpander=false; SetHitboxes(false)
+        DisableSilentHook()
+        if FOVCircle then FOVCircle.Visible=false end
+        if TargetDot then TargetDot.Visible=false end
+        OT.SilentAim=false; OT.CameraAim=false; OT.ESP=false; OT.ESPTracers=false; OT.WalkSpeedEnabled=false; OT.InfiniteJump=false; OT.NoClip=false; OT.FlyEnabled=false; OT.BHop=false; OT.HitboxExpander=false; SetHitboxes(false)
         Window:Destroy()
     end })
 
@@ -4754,7 +4924,7 @@ function require_OneTap()
         if OT.WalkSpeedEnabled then local _,_,hum=GetParts(); if hum then hum.WalkSpeed = OT.WalkSpeedValue + (math.random()-0.5)*0.5 end end
     end)
 
-    Rayfield:Notify({ Title = "OUTCOME HUB", Content = "[FPS] One Tap loaded — use on ALT/PRIVATE!", Duration = 5 })
+    Rayfield:Notify({ Title = "OUTCOME HUB", Content = "[FPS] One Tap loaded — SilentAim ready!", Duration = 5 })
 end
 
 -- LAUNCH
