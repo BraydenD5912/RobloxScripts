@@ -1,11 +1,12 @@
 -- ══════════════════════════════════════════════════════════════
--- OUTCOME HUB — Multi-Game Roblox Hub
+-- OUTCOME HUB — Multi-Game Roblox Hub v3 (improved)
 -- Auto-detects the game and loads the right module
--- Games: +1 Speed Keyboard Escape | Basketball Legends
+-- Games: +1 Speed Keyboard Escape | Basketball Legends | Sniper Duels | Hypershot | Blox Fruits | Runaways | Clean The Leaves
+-- Improvements: throttled scans, ESP pooling, reversible WhiteScreen, lazy Fly/NoClip, visibility-checked aimbot, humanized jitter
 -- ══════════════════════════════════════════════════════════════
 
 local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua'))()
-print("[OUTCOME HUB] step 1: Rayfield loaded")
+print("[OUTCOME HUB] v3 step 1: Rayfield loaded (perf: throttled scans, pooled ESP, jittered waits)")
 
 -- ══════════════════════════════════════════════════════════════
 -- SERVICES (shared)
@@ -72,6 +73,23 @@ function Util.ScanCompare(name, patterns)
     return false
 end
 
+-- Throttle helper to reduce GetDescendants spam
+Util._lastScan = {}
+function Util.Throttled(key, intervalSec, fn)
+    local now = os.clock()
+    local last = Util._lastScan[key] or 0
+    if now - last < intervalSec then return nil end
+    Util._lastScan[key] = now
+    return fn()
+end
+
+-- ESP pooling: track created highlights to avoid flicker/leak
+Util._espPool = {}
+function Util.ClearESP(pool)
+    for _, v in ipairs(pool) do pcall(function() v:Destroy() end) end
+    table.clear(pool)
+end
+
 -- Unified "is this input currently held?" for both keyboard keys and mouse buttons.
 -- AimKey stores a token string (e.g. "LMouse","RMouse","X",...). Returns KeyCode or nil.
 function Util.ResolveInput(token)
@@ -101,6 +119,20 @@ function Util.IsHeld(token)
     end
     return false
 end
+
+-- Config persistence (executor file IO if available)
+Util.ConfigFile = "OutcomeHub_Config.json"
+function Util.SaveConfig(tbl)
+    if not writefile then return end
+    pcall(function() writefile(Util.ConfigFile, game:GetService("HttpService"):JSONEncode(tbl)) end)
+end
+function Util.LoadConfig()
+    if not readfile or not isfile or not isfile(Util.ConfigFile) then return {} end
+    local ok, data = pcall(function() return game:GetService("HttpService"):JSONDecode(readfile(Util.ConfigFile)) end)
+    if ok and type(data)=="table" then return data end
+    return {}
+end
+
 
 -- ══════════════════════════════════════════════════════════════
 -- GAME DETECTION
@@ -150,7 +182,7 @@ local function DetectGame()
         GameName = "bloxfruits"
     elseif pn:find("runaways") then
         GameName = "runaways"
-    elseif pn:find("leaf") or pn:find("rake") or pn:find("yard") or pn:find("clean") and pn:find("leaf") then
+    elseif pn:find("leaf") or pn:find("rake") or pn:find("yard") or (pn:find("clean") and pn:find("leaf")) then
         GameName = "cleanleaves"
     elseif pn:find("keyboard") or pn:find("escape") or pn:find("speed") then
         GameName = "keyboardescape"
@@ -192,8 +224,8 @@ DetectGame()
 -- WINDOW (shared)
 -- ══════════════════════════════════════════════════════════════
 local Window = Rayfield:CreateWindow({
-    Name = "OUTCOME HUB",
-    LoadingTitle = "Multi-Game Hub",
+    Name = "OUTCOME HUB v3",
+    LoadingTitle = "Multi-Game Hub v3",
     LoadingSubtitle = (GameName == "keyboardescape" and "+1 Speed Keyboard Escape")
         or (GameName == "basketball" and "Basketball Legends")
         or (GameName == "sniper" and "Sniper Duels")
@@ -222,13 +254,8 @@ function require_KeyboardEscape()
         [6]  = CFrame.new(-538.371643, 52.5018692, 1447.88953),
         [7]  = CFrame.new(-1007.7088, 52.5018692, 1447.88953),
         [8]  = CFrame.new(-1123.46582, 294.501862, 1447.88953),
-        [9]  = nil,
-        [10] = nil,
-        [11] = nil,
-        [12] = nil,
-        [13] = nil,
-        [14] = nil,
-        [15] = nil,
+        -- 9-15 auto-learn via SavedStageCoords + win-pad scan (no hardcoded coords yet)
+        [9]  = nil, [10] = nil, [11] = nil, [12] = nil, [13] = nil, [14] = nil, [15] = nil,
     }
     local TREADMILL_CF = CFrame.new(18.0236549, 7.54272556, -40.5097961)
 
@@ -275,10 +302,14 @@ function require_KeyboardEscape()
     end
     pcall(ScanRemotes)
 
-    -- Saved per-stage coords (user + auto)
+    -- Saved per-stage coords (user + auto) with file persist
     local SavedStageCoords = {}
     local SelectedStage = 1
     pcall(function() if _G.OutcomeWinCoords then SavedStageCoords = _G.OutcomeWinCoords end end)
+    pcall(function()
+        local cfg = Util.LoadConfig()
+        if cfg.winCoords then for k,v in pairs(cfg.winCoords) do if not SavedStageCoords[k] then SavedStageCoords[k]=Vector3.new(v.X or v[1], v.Y or v[2], v.Z or v[3]) end end end
+    end)
 
     local function SaveCoordsForStage(stage, pos)
         SavedStageCoords[stage] = pos
@@ -297,7 +328,7 @@ function require_KeyboardEscape()
 
     local function FindWinPads(forceRescan)
         if not forceRescan and WinPadCache.pads and #WinPadCache.pads > 0
-            and os.clock() - WinPadCache.lastScan < 3 then
+            and os.clock() - WinPadCache.lastScan < 4 then
             return WinPadCache.pads
         end
         local pads = {}
@@ -425,7 +456,7 @@ function require_KeyboardEscape()
                     local root, hum = Util.GetRoot(), Util.GetHumanoid()
                     if root and hum and Util.IsAlive() then
                         if S.AutoSpeedMode == "Quad" then
-                            for _, dir in ipairs({CFrame.new(0,0,-2),CFrame.new(0,0,2),CFrame.new(2,0,0),CFrame.new(-2,0,0)}) do
+                            for _, dir in ipairs({CFrame.new(0,0,-2-math.random()*0.5),CFrame.new(0,0,2+math.random()*0.5),CFrame.new(2+math.random()*0.5,0,0),CFrame.new(-2-math.random()*0.5,0,0)}) do
                                 if not S.AutoSpeed or not Util.IsAlive() then break end
                                 root.CFrame = root.CFrame * dir
                                 hum:Move(Vector3.new(dir.X,0,dir.Z), true)
@@ -478,13 +509,16 @@ function require_KeyboardEscape()
             SelectedStage = tonumber(name:match("%d+")) or 1
         end })
 
-    FarmTab:CreateButton({ Name = "Save My Position as Stage Win Pad",
+    FarmTab:CreateButton({ Name = "Save My Position as Stage Win Pad (also persists)",
         Callback = function()
             local root = Util.GetRoot()
             if root then
                 SaveCoordsForStage(SelectedStage, root.Position)
-                Rayfield:Notify({ Title = "Position Saved", Content = string.format("Stage %d: %.0f, %.0f, %.0f", SelectedStage, root.Position.X, root.Position.Y, root.Position.Z), Duration = 4 })
+                -- persist via file if possible
+                pcall(function() Util.SaveConfig({winCoords = SavedStageCoords}) end)
+                Rayfield:Notify({ Title = "Position Saved", Content = string.format("Stage %d: %.0f, %.0f, %.0f (saved)", SelectedStage, root.Position.X, root.Position.Y, root.Position.Z), Duration = 4 })
                 RefreshCoordStatus(CoordStatus, SavedStageCoords)
+                print(string.format("[OUTCOME] Saved stage %d: Vector3.new(%.2f, %.2f, %.2f)", SelectedStage, root.Position.X, root.Position.Y, root.Position.Z))
             end
         end })
     FarmTab:CreateButton({ Name = "Clear All Saved Coords",
@@ -508,15 +542,20 @@ function require_KeyboardEscape()
                         local targetCF = GetStageCFrame(SelectedStage)
                         if not targetCF then
                             local nearest = GetNearestWinPad()
-                            if nearest then targetCF = nearest.CFrame + Vector3.new(0,3,0) end
+                            if nearest then targetCF = nearest.CFrame end
                         end
                         if targetCF then
                             local tp = targetCF + Vector3.new(0,3,0)
+                            -- humanized TP: random 1-2 stud offset inside pad, preserve velocity check
+                            local humanized = tp * CFrame.new((math.random()-0.5)*2, 0, (math.random()-0.5)*2)
                             if S.AutoWinTween then
-                                local tw = TweenService:Create(root, TweenInfo.new(S.AutoWinTweenSpeed, Enum.EasingStyle.Linear), {CFrame = tp})
+                                local tw = TweenService:Create(root, TweenInfo.new(S.AutoWinTweenSpeed + math.random()*0.15, Enum.EasingStyle.Linear), {CFrame = humanized})
                                 tw:Play(); tw.Completed:Wait()
                             else
-                                root.CFrame = tp
+                                -- even non-tween: add 1 tick delay and small lerp to look like walk
+                                root.AssemblyLinearVelocity = Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
+                                root.CFrame = humanized
+                                task.wait(0.03 + math.random()*0.04)
                             end
                         end
                     end
@@ -637,7 +676,7 @@ function require_KeyboardEscape()
     MovementTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "KENoClipFlag",
         Callback = function(v)
             S.NoClip = v
-            if v then S.Connections.NoClip = RunService.Stepped:Connect(function() if S.NoClip then local c = Util.GetCharacter(); if c then for _, p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end end end)
+            if v then S.Connections.NoClip = RunService.Stepped:Connect(function() if not S.NoClip then return end; local c = Util.GetCharacter(); if not c then return end; for _, p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end end end)
             else DConn("NoClip") end
         end })
 
@@ -665,9 +704,12 @@ function require_KeyboardEscape()
             S.WinPadESP = v
             if v then task.spawn(function()
                 while S.WinPadESP do
-                    ClearESP()
+                    -- dedup: only add missing highlights
                     local pads = FindWinPads(true)
-                    for i, p in ipairs(pads) do if p and p.Parent then MkHighlight(p, Color3.fromRGB(255,255,0), "WinPad"); MkLabel(p, "WIN #"..i, Color3.fromRGB(255,255,0)) end end
+                    local existing = {}; for _,e in ipairs(ESPObjects) do if e.Adornee then existing[e.Adornee]=true end end
+                    for i, p in ipairs(pads) do if p and p.Parent and not existing[p] then MkHighlight(p, Color3.fromRGB(255,255,0), "WinPad"); MkLabel(p, "WIN #"..i, Color3.fromRGB(255,255,0)) end end
+                    -- prune stale
+                    for i=#ESPObjects,1,-1 do local v=ESPObjects[i]; if not v or not v.Parent or (v.Adornee and not v.Adornee.Parent) then pcall(function() v:Destroy() end); table.remove(ESPObjects,i) end end
                     task.wait(3)
                 end
             end) else ClearESP() end
@@ -678,11 +720,13 @@ function require_KeyboardEscape()
             if v then task.spawn(function()
                 while S.PlayerESP do
                     for _, pl in ipairs(Players:GetPlayers()) do
-                        if pl ~= LocalPlayer and pl.Character then
+                        if pl ~= LocalPlayer and pl.Character and not ESPObjects[pl] then
                             local r = pl.Character:FindFirstChild("HumanoidRootPart")
-                            if r then MkHighlight(pl.Character, Color3.fromRGB(255,50,50), "Player"); MkLabel(r, pl.Name, Color3.fromRGB(255,50,50)) end
+                            if r and not pl.Character:FindFirstChild("OH_PlayerESP") then MkHighlight(pl.Character, Color3.fromRGB(255,50,50), "Player"); MkLabel(r, pl.Name, Color3.fromRGB(255,50,50)) end
                         end
                     end
+                    -- prune stale player ESP
+                    for i=#ESPObjects,1,-1 do local v=ESPObjects[i]; if v and v.Adornee and not v.Adornee.Parent then pcall(function() v:Destroy() end); table.remove(ESPObjects,i) end end
                     task.wait(2)
                 end
             end) else ClearESP() end
@@ -693,7 +737,9 @@ function require_KeyboardEscape()
             if v then task.spawn(function()
                 while S.TreadmillESP do
                     local treads = FindTreadmills()
-                    for _, t in ipairs(treads) do if t and t.Parent then MkHighlight(t, Color3.fromRGB(0,200,255), "Tread"); MkLabel(t, t.Name, Color3.fromRGB(0,200,255)) end end
+                    local existing = {}; for _,e in ipairs(ESPObjects) do if e.Adornee then existing[e.Adornee]=true end end
+                    for _, t in ipairs(treads) do if t and t.Parent and not existing[t] then MkHighlight(t, Color3.fromRGB(0,200,255), "Tread"); MkLabel(t, t.Name, Color3.fromRGB(0,200,255)) end end
+                    for i=#ESPObjects,1,-1 do local v=ESPObjects[i]; if not v or not v.Parent or (v.Adornee and not v.Adornee.Parent) then pcall(function() v:Destroy() end); table.remove(ESPObjects,i) end end
                     task.wait(3)
                 end
             end) else ClearESP() end
@@ -715,16 +761,19 @@ function require_KeyboardEscape()
 
     TeleportTab:CreateSection("Stage Teleport")
     TeleportTab:CreateLabel("Uses Stage from Auto Farm tab")
+    local LastTP = nil
     TeleportTab:CreateButton({ Name = "TP to Selected Stage Win Pad",
         Callback = function()
+            local root = Util.GetRoot(); if root then LastTP = root.CFrame end
             local cf = GetStageCFrame(SelectedStage)
-            if cf then local root = Util.GetRoot(); if root then root.CFrame = cf + Vector3.new(0,3,0) end
+            if cf then local root2 = Util.GetRoot(); if root2 then root2.CFrame = cf + Vector3.new(0,3,0) end
             else
                 local pad = FindWinPads(true)[SelectedStage]
-                if pad then local root = Util.GetRoot(); if root then root.CFrame = pad.CFrame + Vector3.new(0,3,0) end
+                if pad then local root2 = Util.GetRoot(); if root2 then root2.CFrame = pad.CFrame + Vector3.new(0,3,0) end
                 else Rayfield:Notify({Title="No Coords",Content="No saved coords for stage "..SelectedStage..". Save one in Auto Farm.",Duration=4}) end
             end
         end })
+    TeleportTab:CreateButton({ Name = "Undo Last TP", Callback = function() local r=Util.GetRoot(); if r and LastTP then r.CFrame = LastTP end end })
     TeleportTab:CreateButton({ Name = "TP to Nearest Win Pad",
         Callback = function() local p = GetNearestWinPad(); if p then local r = Util.GetRoot(); if r then r.CFrame = p.CFrame + Vector3.new(0,3,0) end end end })
 
@@ -748,6 +797,21 @@ function require_KeyboardEscape()
     -- Misc
     MiscTab:CreateSection("Position Tracker")
     local LX = MiscTab:CreateLabel("X: 0"); local LY = MiscTab:CreateLabel("Y: 0"); local LZ = MiscTab:CreateLabel("Z: 0")
+    local FPSLabel = MiscTab:CreateLabel("FPS: -- | Ping: --")
+    do
+        local lastTick = os.clock()
+        local frameCount = 0
+        RunService.RenderStepped:Connect(function()
+            frameCount = frameCount + 1
+            if os.clock() - lastTick >= 1 then
+                local fps = math.floor(frameCount / (os.clock() - lastTick))
+                frameCount = 0; lastTick = os.clock()
+                local ping = "--"
+                pcall(function() ping = tostring(math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())) .. "ms" end)
+                FPSLabel:Set(string.format("FPS: %d | Ping: %s", fps, ping))
+            end
+        end)
+    end
     S.Connections.PosTracker = RunService.Heartbeat:Connect(function()
         local root = Util.GetRoot()
         if root then local p = root.Position; LX:Set(string.format("X: %.1f", p.X)); LY:Set(string.format("Y: %.1f", p.Y)); LZ:Set(string.format("Z: %.1f", p.Z)) end
@@ -757,7 +821,7 @@ function require_KeyboardEscape()
     MiscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "KEAntiAFKFlag",
         Callback = function(v)
             S.AntiAFK = v
-            if v then S.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
+            if v then S.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() task.wait(math.random()*1.2); pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(100,700), math.random(100,400))) end) end)
             else DConn("AntiAFK") end
         end })
 
@@ -778,7 +842,11 @@ function require_KeyboardEscape()
     RunService.RenderStepped:Connect(function()
         local h = Util.GetHumanoid()
         if not h then return end
-        if S.WalkSpeedEnabled then h.WalkSpeed = S.WalkSpeedValue end
+        if S.WalkSpeedEnabled then
+            -- jitter +/- 0.3 to avoid constant flag
+            local jitter = (math.random() - 0.5) * 0.6
+            h.WalkSpeed = S.WalkSpeedValue + jitter
+        end
         if S.JumpPowerEnabled then h.JumpPower = S.JumpPowerValue; h.UseJumpPower = true end
     end)
 
@@ -813,7 +881,7 @@ function require_Basketball()
     }
 
     local function DConn(name)
-        if S.Connections[name] then S.Connections[name]:Disconnect(); S.Connections[name] = nil end
+        if S.Connections[name] then pcall(function() S.Connections[name]:Disconnect() end); S.Connections[name] = nil end
     end
 
     -- Locate shooting remote + shooting UI element
@@ -868,11 +936,13 @@ function require_Basketball()
 
     -- Ball finder
     local function FindBasketball()
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj.Name == "Basketball" and obj:IsA("BasePart") then
-                return obj
+        local ok, res = pcall(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj.Name == "Basketball" and obj:IsA("BasePart") then return obj end
             end
-        end
+            return nil
+        end)
+        if ok then return res end
         return nil
     end
 
@@ -933,21 +1003,16 @@ function require_Basketball()
         Callback = function(v)
             S.AutoShoot = v
             if v then
-                S.Connections.AutoShoot = RunService.RenderStepped:Connect(function()
+                local lastShot = 0
+                S.Connections.AutoShoot = RunService.Heartbeat:Connect(function()
                     if not S.AutoShoot then return end
-                    if ShootingUI and ShootingUI.Visible then
-                        if S.PerfectShot then
-                            -- Perfect mode: wait for meter to hit green zone
-                            if IsMeterInGreen() then
-                                task.wait(S.ShotDelay)
-                                FireShoot()
-                            end
-                        else
-                            -- Legacy: just fire after delay when UI visible
-                            task.wait(S.ShotDelay)
-                            FireShoot()
-                        end
+                    if not ShootingUI or not ShootingUI.Visible then return end
+                    if os.clock() - lastShot < S.ShotDelay then return end
+                    if S.PerfectShot then
+                        if not IsMeterInGreen() then return end
                     end
+                    lastShot = os.clock()
+                    FireShoot()
                 end)
             else
                 DConn("AutoShoot")
@@ -1156,6 +1221,20 @@ function require_Sniper()
         return hrp.Position + Vector3.new(0, 2, 0)
     end
 
+    local function IsVisible(from, to, ignoreList)
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = ignoreList or {LocalPlayer.Character, Camera}
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local dir = to - from
+        local result = Workspace:Raycast(from, dir, params)
+        if not result then return true end
+        -- if hit is part of target character, it's visible
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl.Character and result.Instance:IsDescendantOf(pl.Character) then return true end
+        end
+        return result.Instance == nil
+    end
+
     -- Choose closest valid target within FOV
     local function PickTarget(camPos, look, fov)
         local targets = GetCameraTargetList()
@@ -1165,7 +1244,7 @@ function require_Sniper()
             local dir = (pos - camPos)
             if dir.Magnitude < 0.01 then dir = Vector3.new(0, 0, 0.01) end
             local ang = math.deg(math.acos(math.clamp(dir.Unit:Dot(look), -1, 1)))
-            if ang <= bd then
+            if ang <= bd and (S.AimConfig == "Rage" or IsVisible(camPos, pos, {LocalPlayer.Character})) then
                 bd = ang
                 best = { pos = pos, t = t }
             end
@@ -1177,6 +1256,30 @@ function require_Sniper()
     -- game's own camera controller mouse deltas).
     local hasMMRel = (mousemoverel ~= nil)
     local hasMMAabs = (mousemoveabs ~= nil)
+
+    -- FOV Circle UI (if Drawing lib available)
+    local FOVCircle = nil
+    pcall(function()
+        if Drawing then
+            FOVCircle = Drawing.new("Circle")
+            FOVCircle.Visible = false
+            FOVCircle.Radius = 120
+            FOVCircle.Color = Color3.fromRGB(255,255,255)
+            FOVCircle.Thickness = 1.2
+            FOVCircle.Transparency = 0.7
+            FOVCircle.Filled = false
+            FOVCircle.NumSides = 64
+            RunService.RenderStepped:Connect(function()
+                if not S.Aimbot or S.AimConfig ~= "Legit" then FOVCircle.Visible=false; return end
+                local cam = workspace.CurrentCamera
+                if not cam then return end
+                FOVCircle.Visible = true
+                FOVCircle.Position = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
+                -- FOV deg to pixel radius approximation
+                FOVCircle.Radius = math.clamp(S.AimFOV * 5, 30, 400)
+            end)
+        end
+    end)
 
     -- Aimbot loop with Legit/Rage configs
     local function AimbotLoop()
@@ -1208,9 +1311,12 @@ function require_Sniper()
                         end
                     else
                         -- Legit: aim slightly off-center (human miss window) + smooth
+                        -- humanized miss: screen-space jitter with damping over distance
+                        local distFactor = math.clamp((best.pos - camPos).Magnitude / 200, 0, 1)
+                        local jitterScale = S.LegitOffset * (0.5 + distFactor * 0.5)
                         aimPos = best.pos + Vector3.new(
-                            (math.random() - 0.5) * S.LegitOffset,
-                            (math.random() - 0.5) * S.LegitOffset, 0)
+                            (math.random() - 0.5) * jitterScale,
+                            (math.random() - 0.5) * jitterScale, 0)
                         local sp = cam:WorldToScreenPoint(aimPos)
                         if sp.Z >= 0 and (hasMMRel or hasMMAabs) then
                             local mp = UserInputService:GetMouseLocation()
@@ -1329,7 +1435,7 @@ function require_Sniper()
     MoveTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "SDNoClipFlag",
         Callback = function(v)
             S.NoClip = v
-            if v then S.Connections.NoClip = RunService.Stepped:Connect(function() if S.NoClip then local c = Util.GetCharacter(); if c then for _, p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end end end)
+            if v then S.Connections.NoClip = RunService.Stepped:Connect(function() if not S.NoClip then return end; local c = Util.GetCharacter(); if not c then return end; for _, p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end end end)
             else DConn("NoClip") end
         end })
     MoveTab:CreateToggle({ Name = "Fly (W/Space/Ctrl)", CurrentValue = false, Flag = "SDFlyFlag",
@@ -1409,12 +1515,13 @@ function require_Sniper()
     -- MISC
     miscTab:CreateSection("Warning")
     miscTab:CreateLabel("This game PERMABANS cheaters, no appeals.")
+    miscTab:CreateLabel("V3 humanizes aim + adds visibility checks — still use on alt/private server.")
     miscTab:CreateLabel("Use on a private server / alt account.")
     miscTab:CreateSection("Anti AFK")
     miscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "SDAntiAFKFlag",
         Callback = function(v)
             S.AntiAFK = v
-            if v then S.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
+            if v then S.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() task.wait(math.random()*1.2); pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(100,700), math.random(100,400))) end) end)
             else DConn("AntiAFK") end
         end })
     miscTab:CreateSection("Cleanup")
@@ -1495,6 +1602,15 @@ function require_Hypershot()
         return part.Position
     end
 
+    local function IsVisibleHS(from, to)
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local result = Workspace:Raycast(from, to - from, params)
+        if not result then return true end
+        return result.Instance and result.Instance:IsDescendantOf(to and to.Parent or Workspace) or false
+    end
+
     local function PickTarget(camPos, camLook, fov)
         local best, bestScore = nil, math.huge
         local enemies = GetEnemies()
@@ -1505,7 +1621,7 @@ function require_Hypershot()
             if dist < 0.01 then continue end
             local dir = toTarget / dist
             local ang = math.deg(math.acos(math.clamp(camLook:Dot(dir), -1, 1)))
-            if ang <= fov then
+            if ang <= fov and (H.AimConfig == "Rage" or IsVisibleHS(camPos, pos)) then
                 local score = ang + dist * 0.02
                 if score < bestScore then
                     bestScore = score
@@ -1515,6 +1631,29 @@ function require_Hypershot()
         end
         return best
     end
+
+    -- FOV Circle UI for Hypershot
+    local HS_FOVCircle = nil
+    pcall(function()
+        if Drawing then
+            HS_FOVCircle = Drawing.new("Circle")
+            HS_FOVCircle.Visible = false
+            HS_FOVCircle.Radius = 130
+            HS_FOVCircle.Color = Color3.fromRGB(80,255,120)
+            HS_FOVCircle.Thickness = 1.2
+            HS_FOVCircle.Transparency = 0.6
+            HS_FOVCircle.Filled = false
+            HS_FOVCircle.NumSides = 64
+            RunService.RenderStepped:Connect(function()
+                if not H.Aimbot or H.AimConfig ~= "Legit" then HS_FOVCircle.Visible=false; return end
+                local cam = workspace.CurrentCamera
+                if not cam then return end
+                HS_FOVCircle.Visible = true
+                HS_FOVCircle.Position = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
+                HS_FOVCircle.Radius = math.clamp(H.AimFOV * 6, 30, 420)
+            end)
+        end
+    end)
 
     local firingLock = false
 
@@ -1621,24 +1760,30 @@ function require_Hypershot()
         end
     end
 
-    -- noclip
-    H.Connections["NoClip"] = RunService.Stepped:Connect(function()
-        if H.NoClip then
-            local c, hrp = GetParts()
-            for _, part in ipairs(c and c:GetDescendants() or {}) do
+    -- noclip (lazy: only runs when enabled)
+    local function EnsureNoClipConn()
+        if H.Connections["NoClip"] then return end
+        H.Connections["NoClip"] = RunService.Stepped:Connect(function()
+            if not H.NoClip then return end
+            local c = LocalPlayer.Character
+            if not c then return end
+            for _, part in ipairs(c:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = false end
             end
-        end
-    end)
-
-    -- fly
-    H.Connections["Fly"] = RunService.RenderStepped:Connect(function()
-        local c, hrp, hum = GetParts()
-        if not (c and hrp and hum) then return end
-        if H.FlyEnabled then
+        end)
+    end
+    local function EnsureFlyConn()
+        if H.Connections["Fly"] then return end
+        H.Connections["Fly"] = RunService.Heartbeat:Connect(function()
+            local c, hrp, hum = GetParts()
+            if not (c and hrp and hum) then return end
+            if not H.FlyEnabled then
+                if hum.PlatformStand then hum.PlatformStand = false end
+                return
+            end
             hum.PlatformStand = true
             local speed = H.FlySpeed
-            hrp.Velocity = Vector3.new(0,0,0)
+            -- use AssemblyLinearVelocity for less detection than direct Velocity set when possible
             local move = Vector3.new(0,0,0)
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + Camera.CFrame.LookVector end
             if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - Camera.CFrame.LookVector end
@@ -1646,38 +1791,47 @@ function require_Hypershot()
             if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + Camera.CFrame.RightVector end
             if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0,1,0) end
             if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move = move - Vector3.new(0,1,0) end
-            if move.Magnitude > 0 then move = move.unit * speed end
-            hrp.Velocity = move
-        else
-            hum.PlatformStand = false
-        end
-    end)
-
-    -- infinite jump
-    H.Connections["InfJump"] = UserInputService.JumpRequest:Connect(function()
-        if H.InfiniteJump then
+            if move.Magnitude > 0 then move = move.unit * speed else hum.PlatformStand = false; hrp.AssemblyLinearVelocity = Vector3.zero; return end
+            -- 0.05 lerp for smoother, less flaggy movement
+            hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity:Lerp(move, 0.35)
+        end)
+    end
+    local function EnsureInfJumpConn()
+        if H.Connections["InfJump"] then return end
+        H.Connections["InfJump"] = UserInputService.JumpRequest:Connect(function()
+            if not H.InfiniteJump then return end
             local _, hrp, hum = GetParts()
-            if hrp and hum and hum:GetState() ~= Enum.HumanoidStateType.Falling then
-                hrp:ApplyImpulse(Vector3.new(0, H.JumpPower * 45, 0))
+            if hrp and hum then
+                -- humanized: small random impulse variance
+                local variance = 0.9 + math.random() * 0.2
+                hrp:ApplyImpulse(Vector3.new(0, H.JumpPower * 45 * variance, 0))
             end
-        end
-    end)
-
-    -- bhop (auto-jump on landing while holding space)
-    H.Connections["BHop"] = RunService.Heartbeat:Connect(function()
-        local _, hrp, hum = GetParts()
-        if H.BHop and hrp and hum and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-            if hum:GetState() == Enum.HumanoidStateType.Landed or hum:GetState() == Enum.HumanoidStateType.Running then
-                hum.Jump = true
+        end)
+    end
+    local function EnsureBHopConn()
+        if H.Connections["BHop"] then return end
+        H.Connections["BHop"] = RunService.Heartbeat:Connect(function()
+            if not H.BHop then return end
+            local _, hrp, hum = GetParts()
+            if hrp and hum and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                if hum.FloorMaterial ~= Enum.Material.Air then
+                    hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                end
             end
-        end
-    end)
+        end)
+    end
+    -- init lazily on first toggle; pre-create only InfJump/BHop as lightweight
+    EnsureInfJumpConn()
+    EnsureBHopConn()
 
-    -- movement core loop (walkspeed)
-    RunService.RenderStepped:Connect(function()
+    -- movement core loop (walkspeed) - throttled to 0.2s to save CPU + avoid constant flag
+    local _lastWalk = 0
+    RunService.Heartbeat:Connect(function()
+        if os.clock() - _lastWalk < 0.2 then return end
+        _lastWalk = os.clock()
         if H.WalkSpeedEnabled then
             local _, _, hum = GetParts()
-            if hum then hum.WalkSpeed = H.WalkSpeedValue end
+            if hum then hum.WalkSpeed = H.WalkSpeedValue + (math.random()-0.5)*0.5 end
         end
     end)
 
@@ -1690,6 +1844,7 @@ function require_Hypershot()
     -- WARNING BANNER
     AimTab:CreateSection("WARNING")
     AimTab:CreateLabel("Hypershot bans ALL accounts for cheating — run on ALT / PRIVATE SERVER only!")
+    AimTab:CreateLabel("V3: visibility-checked + FOV-limited aim, jittered movement.")
     AimTab:CreateLabel("Enable features at your own risk.")
 
     -- AIMBOT
@@ -1738,19 +1893,19 @@ function require_Hypershot()
     -- MOVE
     MoveTab:CreateSection("Movement")
     MoveTab:CreateToggle({ Name = "Bunny Hop (hold Space)", CurrentValue = false, Flag = "HSBHopFlag",
-        Callback = function(v) H.BHop = v end })
+        Callback = function(v) H.BHop = v; if v then EnsureBHopConn() end end })
     MoveTab:CreateToggle({ Name = "WalkSpeed", CurrentValue = false, Flag = "HSWalkFlag",
         Callback = function(v) H.WalkSpeedEnabled = v end })
     MoveTab:CreateSlider({ Name = "WalkSpeed", Range = {16,200}, Increment = 1, CurrentValue = 32, Flag = "HSWalkValFlag",
         Callback = function(v) H.WalkSpeedValue = v end })
     MoveTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "HSInfJumpFlag",
-        Callback = function(v) H.InfiniteJump = v end })
+        Callback = function(v) H.InfiniteJump = v; if v then EnsureInfJumpConn() end end })
     MoveTab:CreateSlider({ Name = "Jump Power", Range = {50,300}, Increment = 5, CurrentValue = 60, Flag = "HSJumpFlag",
         Callback = function(v) H.JumpPower = v end })
     MoveTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "HSNoClipFlag",
-        Callback = function(v) H.NoClip = v end })
+        Callback = function(v) H.NoClip = v; if v then EnsureNoClipConn() end end })
     MoveTab:CreateToggle({ Name = "Fly (hold W/Space, Shift to descend)", CurrentValue = false, Flag = "HSFlyFlag",
-        Callback = function(v) H.FlyEnabled = v end })
+        Callback = function(v) H.FlyEnabled = v; if v then EnsureFlyConn() end end })
     MoveTab:CreateSlider({ Name = "Fly Speed", Range = {10,200}, Increment = 5, CurrentValue = 40, Flag = "HSFlySpeedFlag",
         Callback = function(v) H.FlySpeed = v end })
 
@@ -2055,35 +2210,47 @@ function require_BloxFruits()
                 end
             end
             if BF.ChestESP then
-                for _, obj in ipairs(Workspace:GetDescendants()) do
-                    if obj.Name:find("Chest") and obj:IsA("BasePart") and not obj:FindFirstChild("_BF_ESP") then
-                        MakeESP(obj, Color3.fromRGB(255, 215, 0), "Chest")
-                    end
-                end
+                -- throttle chest scan to 5s & cache result
+                local cached = Util.Throttled("BFChestScan", 5, function() local t={}; for _, obj in ipairs(Workspace:GetDescendants()) do if obj.Name:find("Chest") and obj:IsA("BasePart") then table.insert(t,obj) end end; return t end)
+                if cached then for _, obj in ipairs(cached) do if obj and obj.Parent and not obj:FindFirstChild("_BF_ESP") then MakeESP(obj, Color3.fromRGB(255, 215, 0), "Chest") end end end
             end
             task.wait(3)
         end
     end
 
-    -- White Screen / FPS Boost
+    -- White Screen / FPS Boost (reversible + throttled)
+    local WhiteScreenCache = {}
     local function ToggleWhiteScreen(v)
         BF.WhiteScreen = v
+        local Lighting = game:GetService("Lighting")
         if v then
+            WhiteScreenCache = {}
             for _, obj in ipairs(Workspace:GetDescendants()) do
                 if obj:IsA("BasePart") then
+                    WhiteScreenCache[obj] = {Material = obj.Material, Reflectance = obj.Reflectance}
                     obj.Material = Enum.Material.SmoothPlastic
                     obj.Reflectance = 0
                 elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                    WhiteScreenCache[obj] = {Transparency = obj.Transparency}
                     obj.Transparency = 1
                 elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
+                    WhiteScreenCache[obj] = {Enabled = obj.Enabled}
                     obj.Enabled = false
                 end
             end
             for _, obj in ipairs(Lighting:GetDescendants()) do
                 if obj:IsA("BloomEffect") or obj:IsA("SunRaysEffect") or obj:IsA("BlurEffect") then
+                    WhiteScreenCache[obj] = {Enabled = obj.Enabled}
                     obj.Enabled = false
                 end
             end
+        else
+            for obj, props in pairs(WhiteScreenCache) do
+                if obj and obj.Parent then
+                    for k, val in pairs(props) do pcall(function() obj[k] = val end) end
+                end
+            end
+            WhiteScreenCache = {}
         end
     end
 
@@ -2116,7 +2283,7 @@ function require_BloxFruits()
                         Attack()
                         UseSkills()
                     end
-                    task.wait(BF.FarmDelay)
+                    task.wait(BF.FarmDelay + math.random()*0.1)
                 end
             end) end
         end })
@@ -2149,7 +2316,7 @@ function require_BloxFruits()
                         -- try to find boss spawn
                         task.wait(5)
                     end
-                    task.wait(BF.FarmDelay)
+                    task.wait(BF.FarmDelay + math.random()*0.08)
                 end
             end) end
         end })
@@ -2283,7 +2450,7 @@ function require_BloxFruits()
     MoveTab:CreateToggle({ Name = "NoClip", CurrentValue = false, Flag = "BFNoClipFlag",
         Callback = function(v)
             BF.NoClip = v
-            if v then BF.Connections.NoClip = RunService.Stepped:Connect(function() if BF.NoClip then local c = LocalPlayer.Character; if c then for _, p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end end end)
+            if v then BF.Connections.NoClip = RunService.Stepped:Connect(function() if not BF.NoClip then return end; local c = LocalPlayer.Character; if not c then return end; for _, p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end end end)
             else DConn("NoClip") end
         end })
     MoveTab:CreateToggle({ Name = "Bunny Hop", CurrentValue = false, Flag = "BFBHopFlag",
@@ -2323,7 +2490,7 @@ function require_BloxFruits()
     MiscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "BFAntiAFKFlag",
         Callback = function(v)
             BF.AntiAFK = v
-            if v then BF.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
+            if v then BF.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() task.wait(math.random()*1.0); pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(100,700), math.random(100,400))) end) end)
             else DConn("AntiAFK") end
         end })
 
@@ -2749,11 +2916,15 @@ function require_Runaways()
     HunterTab:CreateSlider({ Name = "Alert Distance", Range = {20, 200}, Increment = 5, Suffix = " studs", CurrentValue = 50, Flag = "RWAntiHunterDistFlag",
         Callback = function(v) RW.AntiHunterDistance = v end })
 
-    -- Hunter distance checker loop
+    -- Hunter distance checker loop (throttled to 0.7s to reduce spam)
     task.spawn(function()
-        while task.wait(0.5) do
+        local lastAlert = 0
+        while task.wait(0.7) do
             if RW.HunterAlert or RW.AntiHunter then
-                CheckHunterDistance()
+                if os.clock() - lastAlert > 2 then
+                    CheckHunterDistance()
+                    lastAlert = os.clock()
+                end
             end
         end
     end)
@@ -2860,7 +3031,7 @@ function require_Runaways()
     MiscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "RWAntiAFKFlag",
         Callback = function(v)
             RW.AntiAFK = v
-            if v then RW.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
+            if v then RW.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() task.wait(math.random()*1.0); pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(100,700), math.random(100,400))) end) end)
             else DConn("AntiAFK") end
         end })
 
@@ -2947,9 +3118,12 @@ function require_CleanLeaves()
         return hum and hum.Health > 0
     end
 
-    -- Find leaves (parts with leaf-like names/materials)
-    local function FindLeaves()
+    -- Find leaves (parts with leaf-like names/materials) - throttled wrapper recommended
+    local _leafCache = {data={}, last=0}
+    local function FindLeaves(force)
+        if not force and os.clock() - _leafCache.last < 4 and #_leafCache.data >0 then return _leafCache.data end
         local leaves = {}
+        local ok = pcall(function()
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("BasePart") then
                 local name = obj.Name:lower()
@@ -2961,6 +3135,9 @@ function require_CleanLeaves()
                 end
             end
         end
+        end)
+        _leafCache.data = leaves
+        _leafCache.last = os.clock()
         return leaves
     end
 
@@ -3046,13 +3223,15 @@ function require_CleanLeaves()
         if hum then hum:EquipTool(tool) end
     end
 
-    -- Auto clean leaves
+    -- Auto clean leaves (nearest-first + throttled)
     local function CleanLeaves()
         if not CL.AutoClean then return end
         local _, hrp = GetParts()
         if not hrp then return end
         
         local leaves = FindLeaves()
+        -- sort by nearest to reduce travel
+        table.sort(leaves, function(a,b) return (hrp.Position - a.Position).Magnitude < (hrp.Position - b.Position).Magnitude end)
         local tool = CL.EquipBestTool and FindBestTool() or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool"))
         
         for _, leaf in ipairs(leaves) do
@@ -3255,6 +3434,22 @@ function require_CleanLeaves()
     MainTab:CreateSlider({ Name = "Sell Delay", Range = {1, 30}, Increment = 1, Suffix = "s", CurrentValue = 5, Flag = "CLSellDelayFlag",
         Callback = function(v) CL.SellDelay = v end })
 
+    MainTab:CreateSection("Full Auto Cycle")
+    MainTab:CreateToggle({ Name = "Full Auto (Clean → Collect → Sell loop)", CurrentValue = false, Flag = "CLFullAutoFlag",
+        Callback = function(v)
+            CL.FullAuto = v
+            if v then task.spawn(function()
+                while CL.FullAuto do
+                    if CL.AutoClean then CleanLeaves() end
+                    task.wait(0.7)
+                    if CL.AutoCollect then CollectPiles() end
+                    task.wait(0.7)
+                    if CL.AutoSell then SellLeaves() end
+                    task.wait(CL.SellDelay)
+                end
+            end) end
+        end })
+
     -- TOOLS
     ToolTab:CreateSection("Tool Management")
     ToolTab:CreateToggle({ Name = "Auto Equip Best Tool", CurrentValue = false, Flag = "CLEquipBestFlag",
@@ -3365,7 +3560,7 @@ function require_CleanLeaves()
     MiscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "CLAntiAFKFlag",
         Callback = function(v)
             CL.AntiAFK = v
-            if v then CL.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
+            if v then CL.Connections.AntiAFK = LocalPlayer.Idled:Connect(function() task.wait(math.random()*1.0); pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(100,700), math.random(100,400))) end) end)
             else DConn("AntiAFK") end
         end })
 
@@ -3395,7 +3590,7 @@ end
 
 -- LAUNCH
 -- ══════════════════════════════════════════════════════════════
-local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/KeyboardEscapeHub.lua'
+local HUB_SOURCE_URL = 'https://raw.githubusercontent.com/BraydenD5912/RobloxScripts/refs/heads/main/OutcomeHub.lua'
 
 -- Fully re-execute the hub from scratch so never build tabs on a destroyed window.
 local function Reload(gameName)
@@ -3421,6 +3616,10 @@ local function ShowHomeTab()
     HomeTab:CreateButton({ Name = "Reload as Blox Fruits", Callback = function() Reload("bloxfruits") end })
     HomeTab:CreateButton({ Name = "Reload as Runaways (Beta)", Callback = function() Reload("runaways") end })
     HomeTab:CreateButton({ Name = "Reload as Clean The Leaves", Callback = function() Reload("cleanleaves") end })
+    HomeTab:CreateSection("Debug")
+    HomeTab:CreateLabel("Executor: " .. tostring(identifyexecutor and identifyexecutor() or "unknown"))
+    HomeTab:CreateLabel("Drawing: " .. tostring(Drawing ~= nil) .. " | mousemoverel: " .. tostring(mousemoverel ~= nil))
+    HomeTab:CreateButton({ Name = "Copy PlaceId + JobId", Callback = function() if setclipboard then setclipboard("PlaceId: "..tostring(game.PlaceId).." JobId: "..tostring(game.JobId)) end; Rayfield:Notify({Title="Copied", Content="PlaceId + JobId copied", Duration=2}) end })
 end
 
 local Launched = false
@@ -3450,7 +3649,7 @@ function LaunchGame()
     end
     if not ok then
         Launched = false
-        warn("[OUTCOME HUB] Launch error: " .. tostring(err))
+        warn("[OUTCOME HUB] Launch error: " .. tostring(err) .. "\n" .. debug.traceback())
         print("[OUTCOME HUB] step 4: module FAILED with: " .. tostring(err))
         local ht = ShowHomeTab()
         if ht then ht:CreateLabel("Load failed: " .. tostring(err)) end
