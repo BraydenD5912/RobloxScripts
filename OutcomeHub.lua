@@ -4254,15 +4254,60 @@ function require_OneTap()
     local Camera = Workspace.CurrentCamera
     Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function() Camera = Workspace.CurrentCamera end)
 
-    -- attempt to load WeaponPackets for silent aim
+    -- attempt to load WeaponPackets for silent aim (brute-force for Xeno + path changes)
     local WeaponPackets = nil
-    pcall(function()
-        WeaponPackets = require(ReplicatedStorage:WaitForChild("Common"):WaitForChild("Packets"):WaitForChild("WeaponPackets"))
-    end)
-    if not WeaponPackets then
-        pcall(function() WeaponPackets = require(ReplicatedStorage.Common.Packets.WeaponPackets) end)
+    local WeaponPacketsPath = nil
+    local function FindWeaponPackets()
+        -- try known paths first
+        local tries = {
+            function() return ReplicatedStorage:FindFirstChild("Common") and ReplicatedStorage.Common:FindFirstChild("Packets") and ReplicatedStorage.Common.Packets:FindFirstChild("WeaponPackets") end,
+            function() return ReplicatedStorage:FindFirstChild("Packets") and ReplicatedStorage.Packets:FindFirstChild("WeaponPackets") end,
+            function() return ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("WeaponPackets") end,
+        }
+        for _, fn in ipairs(tries) do
+            local ok, mod = pcall(fn)
+            if ok and mod then
+                WeaponPacketsPath = mod:GetFullName()
+                local ok2, req = pcall(function() return require(mod) end)
+                if ok2 and req and req.useWeapon then return req end
+            end
+        end
+        -- brute force: scan all descendants for useWeapon
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj.Name == "WeaponPackets" and obj:IsA("ModuleScript") then
+                WeaponPacketsPath = obj:GetFullName()
+                local ok2, req = pcall(function() return require(obj) end)
+                if ok2 and req and req.useWeapon and req.useWeapon.send then
+                    print("[OUTCOME] OneTap Found WeaponPackets via brute force:", WeaponPacketsPath)
+                    return req
+                end
+            end
+        end
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj.Name:lower():find("weapon") and obj:IsA("ModuleScript") then
+                local ok2, req = pcall(function() return require(obj) end)
+                if ok2 and req and req.useWeapon and req.useWeapon.send then
+                    WeaponPacketsPath = obj:GetFullName()
+                    print("[OUTCOME] OneTap Found WeaponPackets via weapon scan:", WeaponPacketsPath)
+                    return req
+                end
+            end
+        end
+        return nil
     end
-    print("[OUTCOME] OneTap WeaponPackets:", WeaponPackets and "found" or "NOT FOUND - silent aim disabled, using camera aim only")
+    WeaponPackets = FindWeaponPackets()
+    print("[OUTCOME] OneTap WeaponPackets:", WeaponPackets and ("found at " .. (WeaponPacketsPath or "unknown")) or "NOT FOUND - silent aim disabled, using camera aim only")
+    if not WeaponPackets then
+        -- fallback: try to find remote that handles shooting (FireServer hook)
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj:IsA("RemoteEvent") and obj.Name:lower():find("weapon") then
+                print("[OUTCOME] OneTap Fallback RemoteEvent found:", obj:GetFullName())
+            end
+            if obj:IsA("RemoteEvent") and (obj.Name:lower():find("shoot") or obj.Name:lower():find("fire") or obj.Name:lower():find("hit")) then
+                print("[OUTCOME] OneTap Potential Shoot Remote:", obj:GetFullName())
+            end
+        end
+    end
 
     local OT = {
         -- Aimbot modes: SilentAim hooks packets (invisible), CameraAim moves mouse/camera
@@ -4598,17 +4643,34 @@ function require_OneTap()
             local old = table.remove(ESPItems, 1)
             pcall(function() old:Destroy() end)
         end
-        local hl = Instance.new("Highlight")
-        hl.Name = "_OT_ESP"
-        hl.Adornee = c
-        hl.FillColor = color
-        hl.OutlineColor = Color3.fromRGB(255,255,255)
-        hl.FillTransparency = 0.35
-        hl.OutlineTransparency = 0
-        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        local ok = pcall(function() hl.Parent = game:GetService("CoreGui") end)
-        if not ok or not hl.Parent then hl.Parent = c end
-        table.insert(ESPItems, hl)
+        local hl = nil
+        local okH = pcall(function()
+            hl = Instance.new("Highlight")
+            hl.Name = "_OT_ESP"
+            hl.Adornee = c
+            hl.FillColor = color
+            hl.OutlineColor = Color3.fromRGB(255,255,255)
+            hl.FillTransparency = 0.35
+            hl.OutlineTransparency = 0
+            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            local ok2 = pcall(function() hl.Parent = game:GetService("CoreGui") end)
+            if not ok2 or not hl.Parent then hl.Parent = c end
+        end)
+        if not okH or not hl or not hl.Parent then
+            -- fallback: BoxHandleAdornment for Xeno if Highlight blocked
+            pcall(function()
+                hl = Instance.new("BoxHandleAdornment")
+                hl.Name = "_OT_ESP"
+                hl.Adornee = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head") or c:FindFirstChildWhichIsA("BasePart")
+                hl.AlwaysOnTop = true
+                hl.ZIndex = 5
+                hl.Size = Vector3.new(4, 6, 2)
+                hl.Color3 = color
+                hl.Transparency = 0.4
+                hl.Parent = c
+            end)
+        end
+        if hl then table.insert(ESPItems, hl) end
         -- Billboard name + distance
         local hrp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head") or c:FindFirstChildWhichIsA("BasePart")
         if hrp then
@@ -4755,7 +4817,7 @@ function require_OneTap()
     AimTab:CreateLabel("SilentAim hooks WeaponPackets (invisible). CameraAim moves mouse.")
 
     AimTab:CreateSection("Silent Aim (Packet Hook - Recommended)")
-    AimTab:CreateToggle({ Name = "Silent Aim (invisible)", CurrentValue = false, Flag = "OT_SilentFlag",
+    AimTab:CreateToggle({ Name = "Silent Aim (packet hook - try first)", CurrentValue = false, Flag = "OT_SilentFlag",
         Callback = function(v)
             OT.SilentAim = v
             if v then
@@ -4815,6 +4877,26 @@ function require_OneTap()
         end end })
     AimTab:CreateSlider({ Name = "Hitbox Size", Range = {2, 10}, Increment = 0.5, Suffix = " studs", CurrentValue = 4, Flag = "OT_HitboxSizeFlag",
         Callback = function(v) OT.HitboxSize=v end })
+    AimTab:CreateButton({ Name = "Xeno Diagnostic (dump packets)", Callback = function()
+        print("=== XENO DIAGNOSTIC ===")
+        print("WeaponPacketsPath", WeaponPacketsPath or "nil")
+        print("WeaponPackets", WeaponPackets and "found" or "nil")
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj.Name:lower():find("weapon") or obj.Name:lower():find("packet") then
+                print("  ", obj.ClassName, obj:GetFullName())
+            end
+        end
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj:IsA("RemoteEvent") then
+                local n=obj.Name:lower()
+                if n:find("shoot") or n:find("fire") or n:find("weapon") or n:find("hit") or n:find("damage") then
+                    print("  RemoteEvent", obj:GetFullName())
+                end
+            end
+        end
+        print("=== END DIAGNOSTIC ===")
+        Rayfield:Notify({Title="Diagnostic", Content="Check console (F9)", Duration=3})
+    end })
     AimTab:CreateButton({ Name = "Debug: Print Target Info", Callback = function()
         local char, part = GetNearestTarget(OT.SilentAim and OT.SilentFOV or OT.AimFOV, OT.SilentTarget)
         if char and part then
