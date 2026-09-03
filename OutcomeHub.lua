@@ -4271,7 +4271,6 @@ function require_OneTap()
                 end
             end)
             if WeaponPackets then return WeaponPackets end
-            -- also try getgc without true
             pcall(function()
                 for _, v in ipairs(getgc()) do
                     if type(v) == "table" and rawget(v, "useWeapon") then
@@ -4283,6 +4282,44 @@ function require_OneTap()
                 end
             end)
             if WeaponPackets then return WeaponPackets end
+            -- Scan function upvalues (WeaponPackets often captured in closure)
+            if debug and debug.getupvalue then
+                pcall(function()
+                    for _, func in ipairs(getgc(true)) do
+                        if type(func) == "function" then
+                            for i=1, 20 do
+                                local name, val = pcall(debug.getupvalue, func, i)
+                                -- use pcall wrapper correctly
+                                local ok, n, v = pcall(debug.getupvalue, func, i)
+                                if ok and n and v and type(v) == "table" and rawget(v, "useWeapon") then
+                                    WeaponPackets = v
+                                    WeaponPacketsPath = "getgc.upvalue:" .. tostring(n)
+                                    print("[OUTCOME] OneTap Found WeaponPackets via upvalue", n)
+                                    return v
+                                end
+                            end
+                        end
+                    end
+                end)
+                if WeaponPackets then return WeaponPackets end
+            end
+            -- Try getloadedmodules
+            if getloadedmodules then
+                pcall(function()
+                    for _, mod in ipairs(getloadedmodules()) do
+                        if mod.Name == "WeaponPackets" then
+                            local ok2, req = pcall(require, mod)
+                            if ok2 and req and req.useWeapon then
+                                WeaponPackets = req
+                                WeaponPacketsPath = mod:GetFullName() .. " (getloadedmodules)"
+                                print("[OUTCOME] OneTap Found via getloadedmodules")
+                                return req
+                            end
+                        end
+                    end
+                end)
+                if WeaponPackets then return WeaponPackets end
+            end
         end
         -- 2. Try getreg
         if getreg then
@@ -4391,10 +4428,14 @@ function require_OneTap()
         if not hum or hum.Health <= 0 then return false end
         if char:FindFirstChildOfClass("ForceField") or char:FindFirstChild("ForceField") then return false end
         if char:GetAttribute("deployed") == false then return false end
-        -- if attribute doesn't exist, assume alive (lobby vs in-game)
-        -- but OneTap uses deployed=true only when spawned in arena
-        -- we check: if attribute exists and is not nil, then must be true
-        -- if no attribute at all, treat as alive for ESP purposes
+        return true
+    end
+    local function IsAliveForESP(char)
+        if not char then return false end
+        if not char:IsDescendantOf(Workspace) then return false end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return false end
+        -- ignore deployed for ESP so lobby shows players
         return true
     end
 
@@ -4466,17 +4507,28 @@ function require_OneTap()
         return true
     end
 
-    local function GetNearestTarget(FOVRadius, targetBone)
+    local function GetNearestTarget(FOVRadius, targetBone, strictDeployed)
         local BestTarget, BestPart, BestDist = nil, nil, math.huge
         if not Camera then return nil, nil end
+        strictDeployed = (strictDeployed == nil) and true or strictDeployed
         local ViewportSize = Camera.ViewportSize
         local ScreenCenter = Vector2.new(ViewportSize.X / 2, ViewportSize.Y / 2)
         local MyChar = LocalPlayer.Character
         local MyHead = MyChar and (MyChar:FindFirstChild("Head") or MyChar:FindFirstChild("HumanoidRootPart"))
         if not MyHead then return nil, nil end
-        for _, Player in ipairs(Players:GetPlayers()) do
-            if ShouldTargetPlayer(Player) then
+        local function tryPass(requireDeployed)
+            BestTarget, BestPart, BestDist = nil, nil, math.huge
+            for _, Player in ipairs(Players:GetPlayers()) do
                 local Character = Player.Character
+                if not Character then continue end
+                -- for strict pass, require deployed; for relaxed, use ESP check
+                if requireDeployed then
+                    if not IsAliveChar(Character) then continue end
+                else
+                    if not IsAliveForESP(Character) then continue end
+                end
+                if Player == LocalPlayer then continue end
+                if OT.AimTeam and LocalPlayer.Team and Player.Team and LocalPlayer.Team == Player.Team then continue end
                 local HitPart = GetTargetPart(Character, targetBone)
                 if HitPart then
                     local ScreenPos, OnScreen = Camera:WorldToViewportPoint(HitPart.Position)
@@ -4492,8 +4544,12 @@ function require_OneTap()
                     end
                 end
             end
+            return BestTarget, BestPart
         end
-        return BestTarget, BestPart
+        -- first try strict (deployed only, for arena), then fallback to relaxed (lobby test)
+        local t1,p1 = tryPass(true)
+        if t1 then return t1,p1 end
+        return tryPass(false)
     end
 
     -- Silent Aim hook - dual path: WeaponPackets packet hook OR hookmetamethod FireServer fallback
@@ -4784,7 +4840,7 @@ function require_OneTap()
             for _, v in ipairs(ESPItems) do if v:IsA("Highlight") and v.Adornee then existing[v.Adornee] = true end end
             for _, pl in ipairs(Players:GetPlayers()) do
                 if pl ~= LocalPlayer and pl.Character and not existing[pl.Character] then
-                    if IsAliveChar(pl.Character) then
+                    if IsAliveForESP(pl.Character) then
                         local isEnemy = true
                         if OT.TeamESP and LocalPlayer.Team and pl.Team and LocalPlayer.Team == pl.Team then isEnemy=false end
                         if isEnemy then
@@ -4921,7 +4977,7 @@ function require_OneTap()
         Callback = function(o) OT.SilentTarget = o[1] end })
 
     AimTab:CreateSection("Camera Aimbot (Visible)")
-    AimTab:CreateToggle({ Name = "Camera Aimbot (hold key)", CurrentValue = false, Flag = "OT_AimFlag",
+    AimTab:CreateToggle({ Name = "Camera Aimbot (hold key) *USE THIS ON XENO*", CurrentValue = false, Flag = "OT_AimFlag",
         Callback = function(v) OT.CameraAim=v; if v then task.spawn(CameraAimLoop) end end })
     AimTab:CreateDropdown({ Name = "Hold Key", Options = {"Left Mouse","Right Mouse","X","Q","E","F","V","T","G","C","Mouse Button 3","Mouse Button 4","Mouse Button 5"},
         CurrentOption = {"Right Mouse"}, Flag = "OT_AimKeyFlag",
