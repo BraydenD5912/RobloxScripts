@@ -276,7 +276,7 @@ function require_KeyboardEscape()
         [8]  = CFrame.new(-1123.46582, 294.501862, 1447.88953),
         -- 9-15 auto-learn via SavedStageCoords + scan (save once, persists to file)
         -- After you Save My Position for a stage, use Misc -> Print Stage Coords to get hardcode line
-        [9]  = nil, [10] = nil, [11] = nil, [12] = nil, [13] = nil, [14] = nil, [15] = nil,
+        [9]  = CFrame.new(-2970.3374, 294.501709, 1447.88977), [10] = nil, [11] = nil, [12] = nil, [13] = nil, [14] = nil, [15] = nil,
     }
     local TREADMILL_CF = CFrame.new(18.0236549, 7.54272556, -40.5097961)
 
