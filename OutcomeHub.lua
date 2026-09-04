@@ -282,7 +282,7 @@ function require_KeyboardEscape()
     -- STATE
     local S = {
         AutoSpeed = false, AutoSpeedDelay = 0.01, AutoSpeedMode = "Quad",
-        AutoWin = false, AutoWinTween = false, AutoWinTweenSpeed = 0.5, AutoWinDelay = 3,
+        AutoWin = false, AutoWinCycle = false, AutoWinTween = false, AutoWinTweenSpeed = 0.5, AutoWinDelay = 3,
         AutoRebirth = false, AutoRebirthDelay = 1,
         AutoTreadmill = false,
         AutoStep = false, AutoStepDelay = 0.1,
@@ -552,10 +552,10 @@ function require_KeyboardEscape()
             Rayfield:Notify({ Title = "Scan Complete", Content = string.format("Found %d pads", #pads), Duration = 3 })
         end })
 
-    FarmTab:CreateToggle({ Name = "Auto Win", CurrentValue = false, Flag = "KEAutoWinFlag",
+    FarmTab:CreateToggle({ Name = "Auto Win (selected stage)", CurrentValue = false, Flag = "KEAutoWinFlag",
         Callback = function(v)
             S.AutoWin = v
-            if v then task.spawn(function()
+            if v then S.AutoWinCycle=false; task.spawn(function()
                 while S.AutoWin do
                     local root = Util.GetRoot()
                     if root and Util.IsAlive() then
@@ -579,6 +579,39 @@ function require_KeyboardEscape()
                             end
                         end
                     end
+                    task.wait(S.AutoWinDelay)
+                end
+            end) end
+        end })
+    FarmTab:CreateToggle({ Name = "Auto Win CYCLE (1-15 loop)", CurrentValue = false, Flag = "KEAutoWinCycleFlag",
+        Callback = function(v)
+            S.AutoWinCycle = v
+            if v then S.AutoWin=false; task.spawn(function()
+                local cycle = SelectedStage
+                while S.AutoWinCycle do
+                    local root = Util.GetRoot()
+                    if root and Util.IsAlive() then
+                        local targetCF = GetStageCFrame(cycle)
+                        if not targetCF then
+                            local pads = FindWinPads(true)
+                            if pads[cycle] then targetCF = pads[cycle].CFrame end
+                            if not targetCF and #pads>0 then targetCF = pads[1].CFrame end
+                        end
+                        if targetCF then
+                            local humanized = (targetCF + Vector3.new(0,3,0)) * CFrame.new((math.random()-0.5)*2, 0, (math.random()-0.5)*2)
+                            if S.AutoWinTween then
+                                local tw = TweenService:Create(root, TweenInfo.new(S.AutoWinTweenSpeed + math.random()*0.12, Enum.EasingStyle.Linear), {CFrame = humanized})
+                                tw:Play(); tw.Completed:Wait()
+                            else
+                                root.AssemblyLinearVelocity = Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
+                                root.CFrame = humanized
+                                task.wait(0.03 + math.random()*0.04)
+                            end
+                            pcall(function() Rayfield:Notify({Title="Cycle Win", Content="Stage "..cycle.." -> "..((cycle%15)+1), Duration=1}) end)
+                        end
+                    end
+                    cycle = cycle + 1
+                    if cycle > 15 then cycle = 1 end
                     task.wait(S.AutoWinDelay)
                 end
             end) end
@@ -853,7 +886,7 @@ function require_KeyboardEscape()
         Callback = function()
             ClearESP()
             for name, _ in pairs(S.Connections) do DConn(name) end
-            S.AutoSpeed=false; S.AutoWin=false; S.AutoRebirth=false; S.AutoTreadmill=false; S.AutoStep=false
+            S.AutoSpeed=false; S.AutoWin=false; S.AutoWinCycle=false; S.AutoRebirth=false; S.AutoTreadmill=false; S.AutoStep=false
             S.FlyEnabled=false; S.NoClip=false; S.InfiniteJump=false; S.WalkSpeedEnabled=false; S.JumpPowerEnabled=false; S.ClickTP=false; S.AntiAFK=false
             Window:Destroy()
         end })

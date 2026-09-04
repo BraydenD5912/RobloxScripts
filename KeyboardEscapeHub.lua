@@ -1,7 +1,7 @@
 -- ══════════════════════════════════════════════════════════════
--- OUTCOME HUB — +1 Speed Keyboard Escape v3 (improved)
+-- OUTCOME HUB — +1 Speed Keyboard Escape v4
 -- Auto Farm | Auto Win | Auto Rebirth | Movement | ESP
--- v3 — throttled scans, ESP pooling fix, humanized WalkSpeed, single-offset TP fix, white-screen reversible in multi-hub
+-- v4 — cycle win 1→15, pooled ESP all types, humanized TP, throttled scans, file persist, FPS/ping, treadmill priority
 -- ══════════════════════════════════════════════════════════════
 
 local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua'))()
@@ -35,7 +35,7 @@ local STAGE_CFAMES = {
     [6]  = CFrame.new(-538.371643, 52.5018692, 1447.88953),
     [7]  = CFrame.new(-1007.7088, 52.5018692, 1447.88953),
     [8]  = CFrame.new(-1123.46582, 294.501862, 1447.88953),
-    [9]  = nil, -- TODO: waiting for coords
+    [9]  = nil, -- auto-learn via scan + save
     [10] = nil,
     [11] = nil,
     [12] = nil,
@@ -70,6 +70,7 @@ local State = {
 
     -- Auto Win
     AutoWin = false,
+    AutoWinCycle = false,
     AutoWinTween = false,
     AutoWinTweenSpeed = 0.5,
     AutoWinDelay = 3,
@@ -180,7 +181,7 @@ local WinPadCache = { pads = {}, lastScan = 0 }
 
 local function FindWinPads(forceRescan)
     if not forceRescan and WinPadCache.pads and #WinPadCache.pads > 0
-        and os.clock() - WinPadCache.lastScan < 3 then
+        and os.clock() - WinPadCache.lastScan < 4 then
         return WinPadCache.pads
     end
 
@@ -397,9 +398,9 @@ end
 -- WINDOW
 -- ══════════════════════════════════════════════════════════════
 local Window = Rayfield:CreateWindow({
-    Name = "OUTCOME HUB",
+    Name = "OUTCOME HUB — Keyboard Escape v4",
     LoadingTitle = "+1 Speed Keyboard Escape",
-    LoadingSubtitle = "outcome hub v2",
+    LoadingSubtitle = "v4 — cycle win, pooled ESP, humanized",
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
     KeySystem = false,
@@ -632,12 +633,13 @@ FarmTab:CreateButton({
 })
 
 FarmTab:CreateToggle({
-    Name = "Auto Win",
+    Name = "Auto Win (selected stage)",
     CurrentValue = false,
     Flag = "AutoWinFlag",
     Callback = function(Value)
         State.AutoWin = Value
         if Value then
+            State.AutoWinCycle = false
             task.spawn(function()
                 while State.AutoWin do
                     local root = GetRoot()
@@ -669,6 +671,47 @@ FarmTab:CreateToggle({
                             end
                         end
                     end
+                    task.wait(State.AutoWinDelay)
+                end
+            end)
+        end
+    end,
+})
+
+FarmTab:CreateToggle({
+    Name = "Auto Win CYCLE (1→15 loop, best for wins farm)",
+    CurrentValue = false,
+    Flag = "AutoWinCycleFlag",
+    Callback = function(Value)
+        State.AutoWinCycle = Value
+        if Value then
+            State.AutoWin = false
+            task.spawn(function()
+                local cycle = SelectedStage
+                while State.AutoWinCycle do
+                    local root = GetRoot()
+                    if root and IsAlive() then
+                        local targetCF = GetStageCFrame(cycle)
+                        if not targetCF then
+                            local pads = FindWinPads(true)
+                            if pads[cycle] then targetCF = pads[cycle].CFrame end
+                            if not targetCF and #pads>0 then targetCF = pads[1].CFrame end
+                        end
+                        if targetCF then
+                            local humanized = (targetCF + Vector3.new(0, 3, 0)) * CFrame.new((math.random()-0.5)*2, 0, (math.random()-0.5)*2)
+                            if State.AutoWinTween then
+                                local tween = TweenService:Create(root, TweenInfo.new(State.AutoWinTweenSpeed + math.random()*0.12, Enum.EasingStyle.Linear), {CFrame = humanized})
+                                tween:Play(); tween.Completed:Wait()
+                            else
+                                root.AssemblyLinearVelocity = Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
+                                root.CFrame = humanized
+                                task.wait(0.03 + math.random()*0.04)
+                            end
+                            Rayfield:Notify({Title="Cycle Win", Content="Stage "..cycle.." -> "..((cycle%15)+1), Duration=1})
+                        end
+                    end
+                    cycle = cycle + 1
+                    if cycle > 15 then cycle = 1 end
                     task.wait(State.AutoWinDelay)
                 end
             end)
@@ -1071,7 +1114,6 @@ ESPTab:CreateToggle({
         if Value then
             task.spawn(function()
                 while State.WinPadESP do
-                    -- dedup pooled ESP
                     local pads = FindWinPads()
                     local existing={}; for _,e in ipairs(ESPObjects) do if e.Adornee then existing[e.Adornee]=true end end
                     for i, pad in ipairs(pads) do if pad and pad.Parent and not existing[pad] then CreateHighlight(pad, Color3.fromRGB(255, 255, 0), "WinPad"); CreateBillboard(pad, "WIN #" .. i, Color3.fromRGB(255, 255, 0)) end end
@@ -1094,15 +1136,17 @@ ESPTab:CreateToggle({
         if Value then
             task.spawn(function()
                 while State.PlayerESP do
+                    local existing={}; for _,e in ipairs(ESPObjects) do if e.Adornee then existing[e.Adornee]=true end end
                     for _, player in ipairs(Players:GetPlayers()) do
-                        if player ~= LocalPlayer and player.Character then
+                        if player ~= LocalPlayer and player.Character and not existing[player.Character] then
                             local root = player.Character:FindFirstChild("HumanoidRootPart")
-                            if root then
+                            if root and not player.Character:FindFirstChild("OutcomeESP_Player") then
                                 CreateHighlight(player.Character, Color3.fromRGB(255, 50, 50), "Player")
                                 CreateBillboard(root, player.Name, Color3.fromRGB(255, 50, 50))
                             end
                         end
                     end
+                    for i=#ESPObjects,1,-1 do local v=ESPObjects[i]; if not v or not v.Parent or (v.Adornee and not v.Adornee.Parent) then pcall(function() v:Destroy() end); table.remove(ESPObjects,i) end end
                     task.wait(2)
                 end
             end)
@@ -1122,12 +1166,14 @@ ESPTab:CreateToggle({
             task.spawn(function()
                 while State.TreadmillESP do
                     local treads = FindTreadmills()
+                    local existing={}; for _,e in ipairs(ESPObjects) do if e.Adornee then existing[e.Adornee]=true end end
                     for _, tread in ipairs(treads) do
-                        if tread and tread.Parent then
+                        if tread and tread.Parent and not existing[tread] then
                             CreateHighlight(tread, Color3.fromRGB(0, 200, 255), "Treadmill")
                             CreateBillboard(tread, tread.Name, Color3.fromRGB(0, 200, 255))
                         end
                     end
+                    for i=#ESPObjects,1,-1 do local v=ESPObjects[i]; if not v or not v.Parent or (v.Adornee and not v.Adornee.Parent) then pcall(function() v:Destroy() end); table.remove(ESPObjects,i) end end
                     task.wait(3)
                 end
             end)
@@ -1383,6 +1429,7 @@ MiscTab:CreateButton({
         end
         State.AutoSpeed = false
         State.AutoWin = false
+        State.AutoWinCycle = false
         State.AutoRebirth = false
         State.AutoTreadmill = false
         State.AutoStep = false
@@ -1449,8 +1496,8 @@ end)
 -- TOAST
 -- ══════════════════════════════════════════════════════════════
 Rayfield:Notify({
-    Title = "OUTCOME HUB",
-    Content = "v2 loaded — Auto Win improved with scan + fixed coords",
+    Title = "OUTCOME HUB v4",
+    Content = "Keyboard Escape v4 — cycle win, pooled ESP, humanized",
     Duration = 4,
 })
 
