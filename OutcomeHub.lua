@@ -274,7 +274,8 @@ function require_KeyboardEscape()
         [6]  = CFrame.new(-538.371643, 52.5018692, 1447.88953),
         [7]  = CFrame.new(-1007.7088, 52.5018692, 1447.88953),
         [8]  = CFrame.new(-1123.46582, 294.501862, 1447.88953),
-        -- 9-15 auto-learn via SavedStageCoords + win-pad scan (no hardcoded coords yet)
+        -- 9-15 auto-learn via SavedStageCoords + scan (save once, persists to file)
+        -- After you Save My Position for a stage, use Misc -> Print Stage Coords to get hardcode line
         [9]  = nil, [10] = nil, [11] = nil, [12] = nil, [13] = nil, [14] = nil, [15] = nil,
     }
     local TREADMILL_CF = CFrame.new(18.0236549, 7.54272556, -40.5097961)
@@ -387,11 +388,35 @@ function require_KeyboardEscape()
             end
         end
         scan(Workspace)
+        -- Spatial sort Y->Z->X for stage order (not mouse distance)
         if #pads > 1 then
-            table.sort(pads, function(a, b)
-                return (a.Position - LocalPlayer:GetMouse().Hit.Position).Magnitude
-                    < (b.Position - LocalPlayer:GetMouse().Hit.Position).Magnitude
-            end)
+            local function GetStageNum(part)
+                for _, obj in ipairs(part:GetDescendants()) do
+                    if obj:IsA("TextLabel") then
+                        local text = ""
+                        pcall(function() text = obj.Text or "" end)
+                        local num = text:match("Stage%s*(%d+)")
+                        if num then return tonumber(num) end
+                    end
+                end
+                return nil
+            end
+            local hasNum = false
+            for _, pad in ipairs(pads) do if GetStageNum(pad) then hasNum=true; break end end
+            if hasNum then
+                table.sort(pads, function(a,b)
+                    local na = GetStageNum(a) or 999
+                    local nb = GetStageNum(b) or 999
+                    if na ~= nb then return na < nb end
+                    return a.Position.Y < b.Position.Y
+                end)
+            else
+                table.sort(pads, function(a,b)
+                    if math.abs(a.Position.Y - b.Position.Y) > 10 then return a.Position.Y < b.Position.Y end
+                    if math.abs(a.Position.Z - b.Position.Z) > 10 then return a.Position.Z < b.Position.Z end
+                    return a.Position.X < b.Position.X
+                end)
+            end
         end
         WinPadCache.pads = pads
         WinPadCache.lastScan = os.clock()
@@ -542,14 +567,40 @@ function require_KeyboardEscape()
             end
         end })
     FarmTab:CreateButton({ Name = "Clear All Saved Coords",
-        Callback = function() SavedStageCoords = {}; _G.OutcomeWinCoords = {}; RefreshCoordStatus(CoordStatus, SavedStageCoords); Rayfield:Notify({Title="Cleared",Content="All saved coords removed",Duration=2}) end })
-    FarmTab:CreateButton({ Name = "Auto-Scan Win Pads (fallback)",
+        Callback = function() SavedStageCoords = {}; _G.OutcomeWinCoords = {}; pcall(function() if isfile and isfile(Util.ConfigFile) then delfile(Util.ConfigFile) end end); RefreshCoordStatus(CoordStatus, SavedStageCoords); Rayfield:Notify({Title="Cleared",Content="All saved coords removed",Duration=2}) end })
+    FarmTab:CreateButton({ Name = "Print Stage Coords (copy for hardcode)",
+        Callback = function()
+            print("===== STAGE_CFAMES (copy this) =====")
+            for i=1,15 do
+                local cf = GetStageCFrame(i)
+                local vec = SavedStageCoords[i] or (cf and cf.Position)
+                if vec then
+                    print(string.format("    [%d]  = CFrame.new(%.6f, %.6f, %.6f),", i, vec.X, vec.Y, vec.Z))
+                else
+                    print(string.format("    [%d]  = nil, -- not saved", i))
+                end
+            end
+            print("===== SavedStageCoords JSON =====")
+            pcall(function() print(game:GetService("HttpService"):JSONEncode(SavedStageCoords)) end)
+            Rayfield:Notify({Title="Printed", Content="Check console (F9) for coords", Duration=3})
+        end })
+    FarmTab:CreateButton({ Name = "Auto-Scan Win Pads (smart)",
         Callback = function()
             WinPadCache.pads = {}; WinPadCache.lastScan = 0
             local pads = FindWinPads(true)
-            for i, pad in ipairs(pads) do if i <= 15 and not SavedStageCoords[i] then SaveCoordsForStage(i, pad.Position) end end
+            local saved = 0
+            for i, pad in ipairs(pads) do
+                if i <= 15 and not SavedStageCoords[i] then
+                    SaveCoordsForStage(i, pad.Position)
+                    saved = saved + 1
+                    print(string.format("[SCAN] Stage %d -> %.1f, %.1f, %.1f (%s)", i, pad.Position.X, pad.Position.Y, pad.Position.Z, pad.Name))
+                end
+            end
             RefreshCoordStatus(CoordStatus, SavedStageCoords)
-            Rayfield:Notify({ Title = "Scan Complete", Content = string.format("Found %d pads", #pads), Duration = 3 })
+            Rayfield:Notify({ Title = "Scan Complete", Content = string.format("Found %d pads, saved %d new", #pads, saved), Duration = 3 })
+            if #pads < 15 then
+                Rayfield:Notify({Title="Note", Content="Only "..#pads.." pads found - walk closer to stages 9-15 and rescan or Save My Position manually", Duration=5})
+            end
         end })
 
     FarmTab:CreateToggle({ Name = "Auto Win (selected stage)", CurrentValue = false, Flag = "KEAutoWinFlag",

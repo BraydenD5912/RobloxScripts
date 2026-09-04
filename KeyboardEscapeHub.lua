@@ -35,7 +35,7 @@ local STAGE_CFAMES = {
     [6]  = CFrame.new(-538.371643, 52.5018692, 1447.88953),
     [7]  = CFrame.new(-1007.7088, 52.5018692, 1447.88953),
     [8]  = CFrame.new(-1123.46582, 294.501862, 1447.88953),
-    [9]  = nil, -- auto-learn via scan + save
+    [9]  = nil, -- auto-learn: save in-game then Print Coords
     [10] = nil,
     [11] = nil,
     [12] = nil,
@@ -258,14 +258,48 @@ local function FindWinPads(forceRescan)
         end
     end
 
-    -- Sort by distance from spawn so stage 1 = first
-    local spawn = Workspace:FindFirstChild("SpawnLocation") or Workspace:FindFirstChildWhichIsA("SpawnLocation")
-    local origin = Vector3.zero
-    if spawn and spawn:IsA("BasePart") then origin = spawn.Position end
+    -- Sort by stage progression: World1 (low Y) -> World2 (mid) -> World3 (high)
+    -- For 1-8: Y 6 -> 75 -> 52 -> 294, Z 284->1447, X -16->-1123
+    -- For 9-15: group by Y first, then Z, then X to keep win pads in track order
     if #pads > 1 then
-        table.sort(pads, function(a, b)
-            return (a.Position - origin).Magnitude < (b.Position - origin).Magnitude
-        end)
+        -- Try to read stage number from Gui/Text if available (most accurate)
+        local function GetStageNum(part)
+            for _, obj in ipairs(part:GetDescendants()) do
+                if obj:IsA("TextLabel") or obj:IsA("BillboardGui") then
+                    local text = ""
+                    pcall(function() text = obj.Text or "" end)
+                    local num = text:match("Stage%s*(%d+)") or text:match("%D(%d+)%D") or obj.Name:match("%d+")
+                    if num then return tonumber(num) end
+                end
+                if obj.Name:match("Stage") then
+                    local num = obj.Name:match("%d+")
+                    if num then return tonumber(num) end
+                end
+            end
+            return nil
+        end
+        -- Check if any pad has stage number
+        local hasStageNum = false
+        for _, pad in ipairs(pads) do if GetStageNum(pad) then hasStageNum=true; break end end
+        if hasStageNum then
+            table.sort(pads, function(a,b)
+                local na = GetStageNum(a) or 999
+                local nb = GetStageNum(b) or 999
+                if na ~= nb then return na < nb end
+                return (a.Position.Y * 10000 + a.Position.Z) < (b.Position.Y * 10000 + b.Position.Z)
+            end)
+        else
+            -- Fallback: spatial sort Y -> Z -> X (tracks are built sequentially)
+            table.sort(pads, function(a,b)
+                if math.abs(a.Position.Y - b.Position.Y) > 10 then
+                    return a.Position.Y < b.Position.Y
+                end
+                if math.abs(a.Position.Z - b.Position.Z) > 10 then
+                    return a.Position.Z < b.Position.Z
+                end
+                return a.Position.X < b.Position.X
+            end)
+        end
     end
 
     WinPadCache.pads = pads
@@ -605,30 +639,53 @@ FarmTab:CreateButton({
     Callback = function()
         SavedStageCoords = {}
         _G.OutcomeWinCoords = SavedStageCoords
+        pcall(function() if isfile and isfile("OutcomeHub_KE_Config.json") then delfile("OutcomeHub_KE_Config.json") end end)
         RefreshCoordStatus()
         Rayfield:Notify({ Title = "Cleared", Content = "All saved coordinates removed", Duration = 2 })
+    end,
+})
+FarmTab:CreateButton({
+    Name = "Print Stage Coords (copy for hardcode)",
+    Callback = function()
+        print("===== STAGE_CFAMES (copy this) =====")
+        for i=1,15 do
+            local cf = GetStageCFrame(i)
+            local vec = SavedStageCoords[i] or (cf and cf.Position)
+            if vec then
+                print(string.format("    [%d]  = CFrame.new(%.6f, %.6f, %.6f),", i, vec.X, vec.Y, vec.Z))
+            else
+                print(string.format("    [%d]  = nil, -- not saved", i))
+            end
+        end
+        pcall(function() print(game:GetService("HttpService"):JSONEncode(SavedStageCoords)) end)
+        Rayfield:Notify({Title="Printed", Content="Check console (F9) for coords", Duration=3})
     end,
 })
 
 -- Also try auto-scan as fallback
 FarmTab:CreateButton({
-    Name = "Auto-Scan Win Pads (fallback)",
+    Name = "Auto-Scan Win Pads (smart)",
     Callback = function()
         WinPadCache.pads = {}
         WinPadCache.lastScan = 0
         local pads = FindWinPads(true)
-        -- Auto-save scanned pads as stage coords
+        local saved=0
         for i, pad in ipairs(pads) do
             if i <= 15 and not SavedStageCoords[i] then
                 SaveCoordsForStage(i, pad.Position)
+                saved=saved+1
+                print(string.format("[SCAN] Stage %d -> %.1f, %.1f, %.1f (%s)", i, pad.Position.X, pad.Position.Y, pad.Position.Z, pad.Name))
             end
         end
         RefreshCoordStatus()
         Rayfield:Notify({
             Title = "Scan Complete",
-            Content = string.format("Found %d pads — saved to stages", #pads),
+            Content = string.format("Found %d pads, saved %d new", #pads, saved),
             Duration = 3,
         })
+        if #pads < 15 then
+            Rayfield:Notify({Title="Note", Content="Only "..#pads.." pads found - move near 9-15 and rescan or Save manually", Duration=5})
+        end
     end,
 })
 
